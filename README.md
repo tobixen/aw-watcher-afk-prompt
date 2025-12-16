@@ -59,6 +59,45 @@ For Wayland, manually add to your compositor config:
 exec systemctl --user import-environment WAYLAND_DISPLAY
 ```
 
+## Configuration
+
+The watcher can be configured via a config file or command-line arguments. Command-line arguments override config file settings.
+
+### Config File
+
+Configuration is stored in the ActivityWatch standard location:
+```
+~/.config/activitywatch/aw-watcher-ask-away/aw-watcher-ask-away.toml
+```
+
+Example configuration:
+```toml
+# Number of minutes to look into the past for events
+depth = 10.0
+
+# Number of seconds to wait before checking for AFK events again
+frequency = 5.0
+
+# Number of minutes you need to be away before reporting on it
+length = 5.0
+```
+
+The config file is created automatically with default values on first run if it doesn't exist.
+
+### Command-line Arguments
+
+You can override config file settings using command-line arguments:
+```console
+aw-watcher-ask-away --depth 15 --frequency 10 --length 3
+```
+
+Available options:
+- `--depth`: Minutes to look into the past for events (default: from config or 10)
+- `--frequency`: Seconds between AFK event checks (default: from config or 5)
+- `--length`: Minimum AFK minutes before prompting (default: from config or 5)
+- `--testing`: Run in testing mode
+- `--verbose`: Enable verbose logging
+
 ## Roadmap
 
 Most of the improvements involve a more complicated pop-up window.
