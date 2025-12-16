@@ -19,6 +19,20 @@ help:
 	@echo "Only enable-service and setup-wayland has been tested, the latter with sway"
 
 install:
+	@command -v pipx >/dev/null 2>&1 || { \
+		echo "Error: pipx is not installed"; \
+		echo ""; \
+		echo "Please install pipx first:"; \
+		echo "  https://pypa.github.io/pipx/installation/"; \
+		echo ""; \
+		echo "Quick install options:"; \
+		echo "  - Arch Linux: sudo pacman -S python-pipx"; \
+		echo "  - Debian/Ubuntu: sudo apt install pipx"; \
+		echo "  - Fedora: sudo dnf install pipx"; \
+		echo "  - macOS: brew install pipx"; \
+		echo "  - pip: python3 -m pip install --user pipx"; \
+		exit 1; \
+	}
 	pipx install .
 	@echo ""
 	@echo "✓ aw-watcher-ask-away installed successfully!"
