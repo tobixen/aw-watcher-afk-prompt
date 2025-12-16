@@ -46,19 +46,6 @@ make setup-wayland
 
 This automatically configures your compositor to import the WAYLAND_DISPLAY environment variable.
 
-**Manual setup (if preferred):**
-```console
-cp misc/aw-watcher-ask-away.service ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable aw-watcher-ask-away.service
-systemctl --user start aw-watcher-ask-away.service
-```
-
-For Wayland, manually add to your compositor config:
-```
-exec systemctl --user import-environment WAYLAND_DISPLAY
-```
-
 ## Configuration
 
 The watcher can be configured via a config file or command-line arguments. Command-line arguments override config file settings.
@@ -68,18 +55,6 @@ The watcher can be configured via a config file or command-line arguments. Comma
 Configuration is stored in the ActivityWatch standard location:
 ```
 ~/.config/activitywatch/aw-watcher-ask-away/aw-watcher-ask-away.toml
-```
-
-Example configuration:
-```toml
-# Number of minutes to look into the past for events
-depth = 10.0
-
-# Number of seconds to wait before checking for AFK events again
-frequency = 5.0
-
-# Number of minutes you need to be away before reporting on it
-length = 5.0
 ```
 
 The config file is created automatically with default values on first run if it doesn't exist.
