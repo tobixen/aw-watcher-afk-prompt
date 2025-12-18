@@ -2,7 +2,7 @@
 import datetime
 import logging
 from collections import deque
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from copy import deepcopy
 from functools import cached_property
 from itertools import pairwise
@@ -34,7 +34,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def find_afk_bucket(buckets: dict[str, Any]):
+def find_afk_bucket(buckets: dict[str, Any]) -> str:
     match [bucket for bucket in buckets if "afk" in bucket and "lid" not in bucket]:
         case []:
             raise AWWatcherAskAwayError("Cannot find the afk bucket.")
@@ -70,11 +70,11 @@ def squash_overlaps(events: list[aw_core.Event]) -> list[aw_core.Event]:
     return aw_transform.sort_by_timestamp(aw_transform.period_union(deepcopy(events), []))
 
 
-def get_utc_now():
+def get_utc_now() -> datetime.datetime:
     return datetime.datetime.now().astimezone(datetime.UTC)
 
 
-def get_gaps(events: list[aw_core.Event]):
+def get_gaps(events: list[aw_core.Event]) -> Iterator[aw_core.Event]:
     flattened_events = aw_transform.sort_by_timestamp(squash_overlaps(events))
     for first, second in pairwise(flattened_events):
         first_end = first.timestamp + first.duration
@@ -111,10 +111,10 @@ class AWAskAwayClient:
             logger.info("Lid watcher integration disabled in config")
 
     @cached_property
-    def _all_buckets(self):
+    def _all_buckets(self) -> dict[str, Any]:
         return self.client.get_buckets()
 
-    def post_event(self, event: aw_core.Event, message: str):
+    def post_event(self, event: aw_core.Event, message: str) -> None:
         """Post a single event with error handling.
 
         Only marks the event as "seen" after successful posting to avoid data loss.
@@ -192,7 +192,7 @@ class AWAskAwayClient:
                          f"{failed_count} failed. Event will be prompted again.")
             # Don't mark as seen - user will be prompted again
 
-    def get_new_afk_events_to_note(self, seconds: float, durration_thresh: float):
+    def get_new_afk_events_to_note(self, seconds: float, durration_thresh: float) -> Iterator[aw_core.Event] | None:
         """Check whether we recently finished a large AFK event.
 
         Fetches events from both regular AFK watcher and lid watcher (if enabled),
@@ -272,6 +272,7 @@ class AWAskAwayState:
                 return True
         return False
 
+<<<<<<< HEAD
     def mark_event_as_seen(self, event: aw_core.Event):
         """Mark an event as seen (add to recent_events) to prevent re-prompting.
 
@@ -282,8 +283,16 @@ class AWAskAwayState:
             self.recent_events.append(event)
         else:
             logger.debug(f"Event already marked as seen: {event}")
+=======
+    def add_event(self, event: aw_core.Event, message: str) -> None:
+        assert not self.has_event(event)  # noqa: S101
+        event.data[DATA_KEY] = message
+        event["id"] = None  # Wipe the ID so we don't edit the AFK event.
+        logger.debug(f"Posting event: {event}")
+        self.recent_events.append(event)
+>>>>>>> 173f2c6 (Add missing return type annotations)
 
-    def get_unseen_afk_events(self, events: list[aw_core.Event], recency_thresh: float, durration_thresh: float):
+    def get_unseen_afk_events(self, events: list[aw_core.Event], recency_thresh: float, durration_thresh: float) -> Iterator[aw_core.Event]:
         """Check whether we recently finished a large AFK event.
 
         Parameters

@@ -21,7 +21,7 @@ from aw_watcher_ask_away.core import (
 )
 
 
-def prompt(event: aw_core.Event, recent_events: Iterable[aw_core.Event]):
+def prompt(event: aw_core.Event, recent_events: Iterable[aw_core.Event]) -> str | None:
     # TODO: Allow for customizing the prompt from the prompt interface.
     start_time_str = event.timestamp.astimezone(LOCAL_TIMEZONE).strftime("%I:%M")
     end_time_str = (event.timestamp + event.duration).astimezone(LOCAL_TIMEZONE).strftime("%I:%M")
@@ -38,7 +38,7 @@ def prompt(event: aw_core.Event, recent_events: Iterable[aw_core.Event]):
     )
 
 
-def get_state_retries(client: ActivityWatchClient, enable_lid_events: bool = True):
+def get_state_retries(client: ActivityWatchClient, enable_lid_events: bool = True) -> AWAskAwayClient:
     """When the computer is starting up sometimes the aw-server is not ready for requests yet.
 
     So we sit and retry for a while before giving up.
@@ -54,7 +54,7 @@ def get_state_retries(client: ActivityWatchClient, enable_lid_events: bool = Tru
     raise AWWatcherAskAwayError("Could not get a connection to the server.")
 
 
-def main():
+def main() -> None:
     # Load config from file (falls back to defaults if file doesn't exist)
     config = load_config()
 
