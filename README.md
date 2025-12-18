@@ -78,9 +78,8 @@ Available options:
 This watcher can integrate with [aw-watcher-lid](https://github.com/tobixen/aw-watcher-lid) to also prompt you about laptop lid closures and system suspends, not just regular AFK periods.
 
 **Why use both watchers?**
-- Regular AFK: Detects when you step away from keyboard but leave computer running
-- Lid events: Provides exact timestamps for when you close/open your laptop lid or suspend/resume the system
-- Combined: More complete picture of when you're away from your computer
+
+Lid events may sometimes be more accurate than the ordinary afk watcher (particularly for short-lived afk events), but won't catch cases where the laptop is left with the lid open, as well as when someone leaves the desktop computer.
 
 **Setup:**
 1. Install aw-watcher-lid: `pipx install aw-watcher-lid`
@@ -88,9 +87,13 @@ This watcher can integrate with [aw-watcher-lid](https://github.com/tobixen/aw-w
 3. aw-watcher-ask-away will automatically detect and use it
 
 **To disable lid integration:**
-Set `enable_lid_events = false` in your config file.
+I.e. if having an external keyboard it's possible to close the lid without being AFK.  Set `enable_lid_events = false` in your config file - or skip installing the aw-watcher-lid.
 
-**Note:** aw-watcher-lid is an optional third-party watcher, not part of the standard ActivityWatch distribution.
+## Features
+
+### Split AFK Periods
+
+Quite often one ends up doing multiple tasks in my afk periods, for instance it could be "lunch" for 20 minutes and "phone call" for 10 minutes.  The pop-up dialog has a **Split** button for splitting the afk time on multiple event lines.  You can add as many lines as needed and then edit either the start time or the duration of the event lines.
 
 ## Roadmap
 

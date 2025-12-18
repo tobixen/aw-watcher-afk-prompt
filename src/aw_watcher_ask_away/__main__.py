@@ -25,10 +25,17 @@ def prompt(event: aw_core.Event, recent_events: Iterable[aw_core.Event]):
     # TODO: Allow for customizing the prompt from the prompt interface.
     start_time_str = event.timestamp.astimezone(LOCAL_TIMEZONE).strftime("%I:%M")
     end_time_str = (event.timestamp + event.duration).astimezone(LOCAL_TIMEZONE).strftime("%I:%M")
-    prompt = f"What were you doing from {start_time_str} - {end_time_str} ({event.duration.seconds / 60:.1f} minutes)?"
+    prompt_text = f"What were you doing from {start_time_str} - {end_time_str} ({event.duration.seconds / 60:.1f} minutes)?"
     title = "AFK Checkin"
 
-    return aw_dialog.ask_string(title, prompt, [event.data.get(DATA_KEY, '') for event in recent_events])
+    # Pass afk_start and afk_duration_seconds to enable Split button
+    return aw_dialog.ask_string(
+        title,
+        prompt_text,
+        [event.data.get(DATA_KEY, '') for event in recent_events],
+        afk_start=event.timestamp,
+        afk_duration_seconds=event.duration.total_seconds()
+    )
 
 
 def get_state_retries(client: ActivityWatchClient, enable_lid_events: bool = True):
@@ -72,6 +79,17 @@ def main():
     )
     parser.add_argument("--testing", action="store_true", help="Run in testing mode.")
     parser.add_argument("--verbose", action="store_true", help="I want to see EVERYTHING!")
+    parser.add_argument(
+        "--test-dialog",
+        action="store_true",
+        help="Show test dialog immediately (for UI testing without AFK period).",
+    )
+    parser.add_argument(
+        "--test-dialog-duration",
+        type=float,
+        default=30,
+        help="Duration in minutes for test dialog (default: 30).",
+    )
     args = parser.parse_args()
 
     # Set up logging
@@ -82,6 +100,48 @@ def main():
         log_stderr=True,
         log_file=True,
     )
+
+    # Test dialog mode - show dialog immediately for UI testing
+    if args.test_dialog:
+        from datetime import datetime, timedelta, UTC
+        import aw_watcher_ask_away.dialog as aw_dialog
+
+        # Create test AFK event data
+        test_start = datetime.now(UTC) - timedelta(minutes=args.test_dialog_duration)
+        test_duration_seconds = args.test_dialog_duration * 60
+
+        start_time_str = test_start.astimezone(LOCAL_TIMEZONE).strftime("%I:%M")
+        end_time_str = (test_start + timedelta(seconds=test_duration_seconds)).astimezone(
+            LOCAL_TIMEZONE
+        ).strftime("%I:%M")
+        test_prompt = f"What were you doing from {start_time_str} - {end_time_str} ({args.test_dialog_duration:.1f} minutes)?"
+        title = "AFK Checkin (TEST MODE)"
+
+        # Show dialog with split mode support
+        result = aw_dialog.ask_string(
+            title, test_prompt, history=["test1", "test2", "lunch", "meeting"],
+            afk_start=test_start, afk_duration_seconds=test_duration_seconds
+        )
+
+        logger.info("Test dialog closed, processing result...")
+
+        if result is None:
+            logger.info("Test dialog cancelled")
+        elif isinstance(result, tuple) and result[0] == "SPLIT_MODE":
+            activities = result[1]
+            logger.info(f"Test dialog returned {len(activities)} activities:")
+            for i, activity in enumerate(activities, 1):
+                logger.info(
+                    f"  {i}. '{activity.description}' - "
+                    f"{activity.start_time.strftime('%H:%M:%S')} - "
+                    f"{activity.duration_minutes}m {activity.duration_seconds}s"
+                )
+        else:
+            logger.info(f"Test dialog result: '{result}'")
+
+        logger.info("Exiting test dialog mode")
+        # Exit after showing test dialog
+        return
 
     try:
         client = ActivityWatchClient(  # pyright: ignore[reportPrivateImportUsage]
@@ -95,7 +155,17 @@ def main():
                 for event in state.get_new_afk_events_to_note(
                     seconds=args.depth * 60, durration_thresh=args.length * 60
                 ):
-                    if response := prompt(event, state.state.recent_events):
+                    response = prompt(event, state.state.recent_events)
+                    if response is None:
+                        # User cancelled
+                        continue
+                    elif isinstance(response, tuple) and response[0] == "SPLIT_MODE":
+                        # User used split mode
+                        activities = response[1]
+                        logger.info(f"Posting {len(activities)} split activities")
+                        state.post_split_events(event, activities)
+                    else:
+                        # Normal single-entry mode
                         logger.info(response)
                         state.post_event(event, response)
                 time.sleep(args.frequency)
