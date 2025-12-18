@@ -16,7 +16,7 @@ root = tk.Tk()
 root.withdraw()
 
 
-def open_link(link: str):
+def open_link(link: str) -> None:
     import webbrowser
 
     webbrowser.open(link)
@@ -35,7 +35,7 @@ class _AbbreviationStore(UserDict[str, str]):
         self._config_file = config_dir / "abbreviations.json"
         self._load_from_config()
 
-    def _load_from_config(self):
+    def _load_from_config(self) -> None:
         if self._config_file.exists():
             with self._config_file.open() as f:
                 try:
@@ -43,11 +43,11 @@ class _AbbreviationStore(UserDict[str, str]):
                 except json.JSONDecodeError:
                     logger.exception("Failed to load abbreviations from config file.")
 
-    def _save_to_config(self):
+    def _save_to_config(self) -> None:
         with self._config_file.open("w") as f:
             json.dump(self.data, f, indent=4)
 
-    def __setitem__(self, key: str, value: str):
+    def __setitem__(self, key: str, value: str) -> None:
         self.data[key] = value
         self._save_to_config()
 
@@ -293,10 +293,14 @@ class AWAskAwayDialog(simpledialog.Dialog):
         self.entry.insert(0, text)
 
     def previous_entry(self, event=None):  # noqa: ARG002
+        if not self.history:
+            return
         self.history_index = max(0, self.history_index - 1)
         self.set_text(self.history[self.history_index])
 
     def next_entry(self, event=None):  # noqa: ARG002
+        if not self.history:
+            return
         self.history_index = min(len(self.history) - 1, self.history_index + 1)
         self.set_text(self.history[self.history_index])
 
@@ -361,7 +365,7 @@ class AWAskAwayDialog(simpledialog.Dialog):
         box.pack()
 
 
-def ask_string(title: str, prompt: str, history: list[str]):
+def ask_string(title: str, prompt: str, history: list[str]) -> str | None:
     d = AWAskAwayDialog(title, prompt, history)
     return d.result
 
