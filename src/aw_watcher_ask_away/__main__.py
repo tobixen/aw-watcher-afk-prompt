@@ -28,7 +28,7 @@ def prompt(event: aw_core.Event, recent_events: Iterable[aw_core.Event]):
     prompt = f"What were you doing from {start_time_str} - {end_time_str} ({event.duration.seconds / 60:.1f} minutes)?"
     title = "AFK Checkin"
 
-    return aw_dialog.ask_string(title, prompt, [event.data[DATA_KEY] for event in recent_events])
+    return aw_dialog.ask_string(title, prompt, [event.data.get(DATA_KEY, '') for event in recent_events])
 
 
 def get_state_retries(client: ActivityWatchClient, enable_lid_events: bool = True):

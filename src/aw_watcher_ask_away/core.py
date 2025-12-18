@@ -136,14 +136,18 @@ class AWAskAwayClient:
                 except HTTPError:
                     logger.warning("Failed to get lid events, continuing with AFK events only")
 
-            # Merge and sort events from both sources by timestamp (most recent first)
+            # Merge and sort events from both sources by timestamp
+            # Note: sort_by_timestamp() sorts in ASCENDING order (oldest first)
             all_events = aw_transform.sort_by_timestamp(afk_events + lid_events)
 
             # Check if currently AFK (from either source)
-            # Most recent event is first after sorting
-            if all_events and is_afk(all_events[0]):
-                # Currently AFK, wait to bring up the prompt
-                return
+            # Most recent event is LAST after sorting (ascending order)
+            if all_events:
+                most_recent = all_events[-1]  # Last element is most recent
+                currently_afk = is_afk(most_recent)
+                if currently_afk:
+                    # Currently AFK, wait to bring up the prompt
+                    return
 
             yield from self.state.get_unseen_afk_events(all_events, seconds, durration_thresh)
         except HTTPError:
