@@ -13,18 +13,18 @@ import aw_watcher_ask_away.dialog as aw_dialog
 from aw_watcher_ask_away.config import load_config
 from aw_watcher_ask_away.core import (
     DATA_KEY,
-    LOCAL_TIMEZONE,
     WATCHER_NAME,
     AWAskAwayClient,
     AWWatcherAskAwayError,
     logger,
 )
+from aw_watcher_ask_away.utils import format_time_local
 
 
 def prompt(event: aw_core.Event, recent_events: Iterable[aw_core.Event]) -> str | None:
     # TODO: Allow for customizing the prompt from the prompt interface.
-    start_time_str = event.timestamp.astimezone(LOCAL_TIMEZONE).strftime("%I:%M")
-    end_time_str = (event.timestamp + event.duration).astimezone(LOCAL_TIMEZONE).strftime("%I:%M")
+    start_time_str = format_time_local(event.timestamp)
+    end_time_str = format_time_local(event.timestamp + event.duration)
     prompt_text = f"What were you doing from {start_time_str} - {end_time_str} ({event.duration.seconds / 60:.1f} minutes)?"
     title = "AFK Checkin"
 
@@ -110,10 +110,8 @@ def main() -> None:
         test_start = datetime.now(UTC) - timedelta(minutes=args.test_dialog_duration)
         test_duration_seconds = args.test_dialog_duration * 60
 
-        start_time_str = test_start.astimezone(LOCAL_TIMEZONE).strftime("%I:%M")
-        end_time_str = (test_start + timedelta(seconds=test_duration_seconds)).astimezone(
-            LOCAL_TIMEZONE
-        ).strftime("%I:%M")
+        start_time_str = format_time_local(test_start)
+        end_time_str = format_time_local(test_start + timedelta(seconds=test_duration_seconds))
         test_prompt = f"What were you doing from {start_time_str} - {end_time_str} ({args.test_dialog_duration:.1f} minutes)?"
         title = "AFK Checkin (TEST MODE)"
 
