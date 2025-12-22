@@ -13,6 +13,8 @@ import aw_transform
 from aw_client.client import ActivityWatchClient
 from requests.exceptions import HTTPError
 
+from aw_watcher_ask_away.utils import LOCAL_TIMEZONE, format_time_local
+
 # Import ActivityLine for split mode support
 try:
     from aw_watcher_ask_away.split_dialog import ActivityLine
@@ -21,7 +23,6 @@ except ImportError:
     ActivityLine = None
 
 WATCHER_NAME = "aw-watcher-ask-away"
-LOCAL_TIMEZONE = datetime.datetime.now().astimezone().tzinfo
 DATA_KEY = "message"
 """What field in the event data to store the user's message in."""
 

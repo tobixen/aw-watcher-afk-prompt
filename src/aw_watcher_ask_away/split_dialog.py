@@ -11,6 +11,8 @@ from datetime import datetime, timedelta
 from tkinter import simpledialog, ttk
 from typing import Optional
 
+from aw_watcher_ask_away.utils import format_time_local
+
 logger = logging.getLogger(__name__)
 
 
@@ -598,7 +600,8 @@ class ActivityLineWidget:
         self.desc_entry.grid(row=row, column=0, padx=5, pady=2, sticky=tk.W+tk.E)
 
         # Start time field (read-only for first, editable for others)
-        start_str = activity.start_time.strftime("%H:%M:%S") if is_first else activity.start_time.strftime("%H:%M")
+        # Use locale-aware formatting with timezone conversion
+        start_str = format_time_local(activity.start_time, include_seconds=is_first)
         self.start_var = tk.StringVar(master=parent, value=start_str)
         if not is_first:
             self.start_var.trace_add("write", lambda *args: self._on_start_change())
@@ -681,7 +684,7 @@ class ActivityLineWidget:
 
         # Update values
         self.desc_var.set(activity.description)
-        start_str = activity.start_time.strftime("%H:%M:%S") if is_first else activity.start_time.strftime("%H:%M")
+        start_str = format_time_local(activity.start_time, include_seconds=is_first)
         self.start_var.set(start_str)
         self.duration_var.set(activity.duration_minutes)
 
