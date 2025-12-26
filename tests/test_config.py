@@ -15,6 +15,10 @@ def test_default_config_has_expected_keys() -> None:
     assert "depth" in config
     assert "frequency" in config
     assert "length" in config
+    assert "enable_lid_events" in config
+    assert "history_limit" in config
+    assert "enable_backfill" in config
+    assert "backfill_depth" in config
 
 
 def test_default_config_values() -> None:
@@ -26,6 +30,10 @@ def test_default_config_values() -> None:
     assert config["depth"] == 10.0
     assert config["frequency"] == 5.0
     assert config["length"] == 5.0
+    assert config["enable_lid_events"] is True
+    assert config["history_limit"] == 100
+    assert config["enable_backfill"] is True
+    assert config["backfill_depth"] == 1440
 
 
 def test_load_config_returns_defaults_when_no_file() -> None:
@@ -45,6 +53,9 @@ def test_load_config_returns_defaults_when_no_file() -> None:
         assert config["depth"] == 10.0
         assert config["frequency"] == 5.0
         assert config["length"] == 5.0
+        assert config["history_limit"] == 100
+        assert config["enable_backfill"] is True
+        assert config["backfill_depth"] == 1440
 
 
 def test_load_config_returns_custom_values() -> None:

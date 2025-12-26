@@ -1,13 +1,16 @@
 # ruff: noqa: EM101, EM102
 import datetime
+import json
 import logging
 from collections import deque
 from collections.abc import Iterable, Iterator
 from copy import deepcopy
 from functools import cached_property
 from itertools import pairwise
+from pathlib import Path
 from typing import Any
 
+import appdirs
 import aw_core
 import aw_transform
 from aw_client.client import ActivityWatchClient
@@ -83,19 +86,115 @@ def get_gaps(events: list[aw_core.Event]) -> Iterator[aw_core.Event]:
             yield aw_core.Event(None, first_end, second.timestamp - first_end)
 
 
+class SeenEventsStore:
+    """Persistent storage for seen events to survive restarts.
+
+    Stores event timestamps and durations in a JSON file to prevent
+    re-prompting for events that were already handled in previous sessions.
+    """
+
+    def __init__(self, max_age_days: int = 7):
+        """Initialize the seen events store.
+
+        Args:
+            max_age_days: Events older than this will be cleaned up on load
+        """
+        config_dir = Path(appdirs.user_config_dir("aw-watcher-ask-away"))
+        config_dir.mkdir(parents=True, exist_ok=True)
+        self._store_file = config_dir / "seen_events.json"
+        self._max_age_days = max_age_days
+        self._seen: dict[str, dict] = {}
+        self._load()
+
+    def _load(self) -> None:
+        """Load seen events from file and clean up old entries."""
+        if self._store_file.exists():
+            try:
+                with self._store_file.open() as f:
+                    data = json.load(f)
+                    # Clean up old entries
+                    cutoff = datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=self._max_age_days)
+                    for key, value in data.items():
+                        try:
+                            ts = datetime.datetime.fromisoformat(value["timestamp"])
+                            if ts > cutoff:
+                                self._seen[key] = value
+                        except (KeyError, ValueError):
+                            continue
+                    logger.info(f"Loaded {len(self._seen)} seen events from persistent store")
+            except (json.JSONDecodeError, OSError) as e:
+                logger.warning(f"Failed to load seen events: {e}")
+
+    def _save(self) -> None:
+        """Save seen events to file."""
+        try:
+            with self._store_file.open("w") as f:
+                json.dump(self._seen, f, indent=2)
+        except OSError as e:
+            logger.warning(f"Failed to save seen events: {e}")
+
+    def _make_key(self, event: aw_core.Event) -> str:
+        """Create a unique key for an event based on timestamp."""
+        return event.timestamp.isoformat()
+
+    def add(self, event: aw_core.Event) -> None:
+        """Mark an event as seen."""
+        key = self._make_key(event)
+        self._seen[key] = {
+            "timestamp": event.timestamp.isoformat(),
+            "duration": event.duration.total_seconds(),
+        }
+        self._save()
+
+    def has_overlap(self, event: aw_core.Event, overlap_thresh: float = 0.95) -> bool:
+        """Check if we've seen an event that overlaps significantly with this one."""
+        new_start = event.timestamp
+        new_end = event.timestamp + event.duration
+
+        for value in self._seen.values():
+            try:
+                seen_start = datetime.datetime.fromisoformat(value["timestamp"])
+                seen_end = seen_start + datetime.timedelta(seconds=value["duration"])
+
+                # Calculate overlap
+                overlap_start = max(seen_start, new_start)
+                overlap_end = min(seen_end, new_end)
+                overlap = (overlap_end - overlap_start).total_seconds()
+
+                if overlap <= 0:
+                    continue
+
+                # Compare against smaller duration
+                min_duration = min(event.duration.total_seconds(), value["duration"])
+                if min_duration > 0 and overlap / min_duration > overlap_thresh:
+                    return True
+            except (KeyError, ValueError):
+                continue
+
+        return False
+
+
 class AWAskAwayClient:
-    def __init__(self, client: ActivityWatchClient, enable_lid_events: bool = True):
+    def __init__(self, client: ActivityWatchClient, enable_lid_events: bool = True,
+                 history_limit: int = 100):
         self.client = client
         self.bucket_id = f"{WATCHER_NAME}_{self.client.client_hostname}"
         self.enable_lid_events = enable_lid_events
+        self.history_limit = history_limit
 
         if self.bucket_id not in self._all_buckets:
             # TODO: Look into why aw-watcher-afk uses queued=True here.
             client.create_bucket(self.bucket_id, event_type="afktask")
 
-        recent_events = deque(maxlen=10)
-        recent_events.extend(aw_transform.sort_by_timestamp(client.get_events(self.bucket_id, limit=10)))
-        self.state = AWAskAwayState(recent_events)
+        # Initialize persistent seen events store
+        self.seen_store = SeenEventsStore()
+
+        # Load recent events for history display (still using deque for in-memory)
+        recent_events = deque(maxlen=100)
+        recent_events.extend(aw_transform.sort_by_timestamp(
+            client.get_events(self.bucket_id, limit=100)
+        ))
+        self.state = AWAskAwayState(recent_events, self.seen_store)
 
         self.afk_bucket_id = find_afk_bucket(self._all_buckets)
 
@@ -207,14 +306,14 @@ class AWAskAwayClient:
             The number of seconds you need to be away before reporting on it.
         """
         try:
-            # Fetch regular AFK events
-            afk_events = self.client.get_events(self.afk_bucket_id, limit=10)
+            # Fetch regular AFK events (using configurable limit)
+            afk_events = self.client.get_events(self.afk_bucket_id, limit=self.history_limit)
 
             # Fetch lid events if enabled and bucket exists
             lid_events = []
             if self.lid_bucket_id:
                 try:
-                    lid_events = self.client.get_events(self.lid_bucket_id, limit=10)
+                    lid_events = self.client.get_events(self.lid_bucket_id, limit=self.history_limit)
                 except HTTPError:
                     logger.warning("Failed to get lid events, continuing with AFK events only")
 
@@ -241,16 +340,20 @@ class AWAskAwayClient:
 
 
 class AWAskAwayState:
-    def __init__(self, recent_events: Iterable[aw_core.Event]):
-        self.recent_events = recent_events if isinstance(recent_events, deque) else deque(recent_events, 10)
+    def __init__(self, recent_events: Iterable[aw_core.Event],
+                 seen_store: SeenEventsStore | None = None):
+        self.recent_events = recent_events if isinstance(recent_events, deque) else deque(recent_events, 100)
         """The recent events we have posted to the aw-watcher-ask-away bucket.
 
         This is used to avoid asking the user to log an absence that they have already logged.
 
         Sorted from earliest to most recent."""
+        self.seen_store = seen_store
 
     def has_event(self, new: aw_core.Event, overlap_thresh: float = 0.95) -> bool:
         """Check whether we have already posted an event that overlaps with the new event.
+
+        Checks both in-memory recent events AND persistent storage.
 
         The self.recent_events data structure used to be a dictionary with keys as timestamp/durration.
         This method merely checked to see if the new event's (timestamp, durration) tuple was in the dictionary.
@@ -269,6 +372,11 @@ class AWAskAwayState:
         extend over time as new activity data comes in. If we compared against the new (larger)
         duration, we'd fail to recognize the same gap and ask the user again.
         """  # noqa: E501
+        # First check persistent store (if available)
+        if self.seen_store and self.seen_store.has_overlap(new, overlap_thresh):
+            return True
+
+        # Then check in-memory recent events
         for recent in self.recent_events:
             overlap_start = max(recent.timestamp, new.timestamp)
             overlap_end = min(recent.timestamp + recent.duration, new.timestamp + new.duration)
@@ -284,10 +392,14 @@ class AWAskAwayState:
         """Mark an event as seen (add to recent_events) to prevent re-prompting.
 
         This should only be called AFTER the event has been successfully posted.
+        Saves to both in-memory deque and persistent store.
         """
         if not self.has_event(event):
             logger.debug(f"Marking event as seen: {event}")
             self.recent_events.append(event)
+            # Also persist to file
+            if self.seen_store:
+                self.seen_store.add(event)
         else:
             logger.debug(f"Event already marked as seen: {event}")
 

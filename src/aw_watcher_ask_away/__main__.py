@@ -38,7 +38,8 @@ def prompt(event: aw_core.Event, recent_events: Iterable[aw_core.Event]) -> str 
     )
 
 
-def get_state_retries(client: ActivityWatchClient, enable_lid_events: bool = True) -> AWAskAwayClient:
+def get_state_retries(client: ActivityWatchClient, enable_lid_events: bool = True,
+                      history_limit: int = 100) -> AWAskAwayClient:
     """When the computer is starting up sometimes the aw-server is not ready for requests yet.
 
     So we sit and retry for a while before giving up.
@@ -47,7 +48,8 @@ def get_state_retries(client: ActivityWatchClient, enable_lid_events: bool = Tru
         try:
             # This works because the constructor of AWAskAwayState tries to get bucket names.
             # If it didn't we'd need to do something else here.
-            return AWAskAwayClient(client, enable_lid_events=enable_lid_events)
+            return AWAskAwayClient(client, enable_lid_events=enable_lid_events,
+                                   history_limit=history_limit)
         except ConnectionError:
             logger.exception("Cannot connect to client.")
             time.sleep(10)  # 10 * 10 = wait for 100s before giving up.
@@ -89,6 +91,24 @@ def main() -> None:
         type=float,
         default=30,
         help="Duration in minutes for test dialog (default: 30).",
+    )
+    parser.add_argument(
+        "--history-limit",
+        type=int,
+        default=config.get("history_limit", 100),
+        help="Number of events to fetch from each bucket (default: from config or 100).",
+    )
+    parser.add_argument(
+        "--backfill",
+        action="store_true",
+        default=config.get("enable_backfill", True),
+        help="Enable backfill mode - prompt for old unfilled AFK periods.",
+    )
+    parser.add_argument(
+        "--backfill-depth",
+        type=float,
+        default=config.get("backfill_depth", 1440),
+        help="How far back (in minutes) to look for unfilled AFK periods (default: 1440 = 24h).",
     )
     args = parser.parse_args()
 
@@ -146,9 +166,39 @@ def main() -> None:
             client_name=WATCHER_NAME, testing=args.testing
         )
         with client:
-            state = get_state_retries(client, enable_lid_events=config.get("enable_lid_events", True))
+            state = get_state_retries(
+                client,
+                enable_lid_events=config.get("enable_lid_events", True),
+                history_limit=args.history_limit
+            )
             logger.info("Successfully connected to the server.")
 
+            # Backfill mode: on startup, prompt for old unfilled AFK periods
+            if args.backfill:
+                logger.info(f"Backfill mode enabled, looking back {args.backfill_depth} minutes")
+                backfill_events = list(state.get_new_afk_events_to_note(
+                    seconds=args.backfill_depth * 60, durration_thresh=args.length * 60
+                ) or [])
+                # Sort oldest first for chronological backfill
+                backfill_events.sort(key=lambda e: e.timestamp)
+                if backfill_events:
+                    logger.info(f"Found {len(backfill_events)} unfilled AFK periods to backfill")
+                    for event in backfill_events:
+                        response = prompt(event, state.state.recent_events)
+                        if response is None:
+                            # User cancelled - skip this one
+                            continue
+                        elif isinstance(response, tuple) and response[0] == "SPLIT_MODE":
+                            activities = response[1]
+                            logger.info(f"Posting {len(activities)} split activities")
+                            state.post_split_events(event, activities)
+                        else:
+                            logger.info(response)
+                            state.post_event(event, response)
+                else:
+                    logger.info("No unfilled AFK periods found for backfill")
+
+            # Normal operation loop
             while True:
                 for event in state.get_new_afk_events_to_note(
                     seconds=args.depth * 60, durration_thresh=args.length * 60
