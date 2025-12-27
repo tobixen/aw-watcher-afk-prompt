@@ -292,11 +292,69 @@ class AWAskAwayClient:
                          f"{failed_count} failed. Event will be prompted again.")
             # Don't mark as seen - user will be prompted again
 
+    def _fetch_events_with_dynamic_limit(self, initial_limit: int = 10, max_limit: int = 1000):
+        """Fetch events with dynamic limit scaling.
+
+        If we only get AFK heartbeats without any non-afk events to mark the
+        boundary, we need more events to detect the gap properly. This method
+        automatically doubles the limit until we find at least one non-afk event
+        or hit the max limit.
+
+        Returns:
+            Tuple of (all_events, limit_used)
+        """
+        limit = initial_limit
+
+        while limit <= max_limit:
+            # Fetch AFK events
+            afk_events = self.client.get_events(self.afk_bucket_id, limit=limit)
+
+            # Fetch lid events if enabled
+            lid_events = []
+            if self.lid_bucket_id:
+                try:
+                    lid_events = self.client.get_events(self.lid_bucket_id, limit=limit)
+                except HTTPError:
+                    logger.warning("Failed to get lid events, continuing with AFK events only")
+
+            # Merge and sort
+            all_events = aw_transform.sort_by_timestamp(afk_events + lid_events)
+
+            if not all_events:
+                return all_events, limit
+
+            # Check if we have at least one non-afk event (to mark boundaries)
+            has_non_afk = any(not is_afk(e) for e in all_events)
+
+            if has_non_afk:
+                # We have boundaries, good to go
+                if limit > initial_limit:
+                    logger.debug(f"Dynamic limit scaling: needed {limit} events to find gap boundaries")
+                return all_events, limit
+
+            # All events are AFK - we might be missing the gap start
+            # But first check if we got fewer events than requested (no more to fetch)
+            if len(afk_events) < limit:
+                logger.debug(f"Only AFK events found, but no more events available (got {len(afk_events)})")
+                return all_events, limit
+
+            # Double the limit and try again
+            old_limit = limit
+            limit *= 2
+            logger.debug(f"Only AFK heartbeats found, increasing limit from {old_limit} to {limit}")
+
+        logger.warning(f"Reached max limit ({max_limit}) without finding gap boundaries")
+        return all_events, limit
+
     def get_new_afk_events_to_note(self, seconds: float, durration_thresh: float) -> Iterator[aw_core.Event] | None:
         """Check whether we recently finished a large AFK event.
 
         Fetches events from both regular AFK watcher and lid watcher (if enabled),
         then merges them to get a complete picture of away time.
+
+        Uses dynamic limit scaling: starts with a small limit and automatically
+        increases if only AFK heartbeats are found (indicating a long AFK period
+        where we need more events to find the gap boundaries).
 
         Parameters
         ----------
@@ -306,20 +364,11 @@ class AWAskAwayClient:
             The number of seconds you need to be away before reporting on it.
         """
         try:
-            # Fetch regular AFK events (using configurable limit)
-            afk_events = self.client.get_events(self.afk_bucket_id, limit=self.history_limit)
-
-            # Fetch lid events if enabled and bucket exists
-            lid_events = []
-            if self.lid_bucket_id:
-                try:
-                    lid_events = self.client.get_events(self.lid_bucket_id, limit=self.history_limit)
-                except HTTPError:
-                    logger.warning("Failed to get lid events, continuing with AFK events only")
-
-            # Merge and sort events from both sources by timestamp
-            # Note: sort_by_timestamp() sorts in ASCENDING order (oldest first)
-            all_events = aw_transform.sort_by_timestamp(afk_events + lid_events)
+            # Fetch events with dynamic limit scaling
+            all_events, limit_used = self._fetch_events_with_dynamic_limit(
+                initial_limit=10,
+                max_limit=self.history_limit
+            )
 
             # Check if currently AFK (from either source)
             # Most recent event is LAST after sorting (ascending order)
