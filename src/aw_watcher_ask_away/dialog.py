@@ -214,8 +214,10 @@ class AWAskAwayDialog(simpledialog.Dialog):
         # Text editing shortcuts
         # TODO: Wrap the Entry widget so we can reuse these in other dialogs.
         self.bind("<Control-BackSpace>", self.remove_word)
-        self.bind("<Control-u>", self.remove_to_start)
         self.bind("<Control-w>", self.remove_word)
+
+        # Quick dismiss as UNKNOWN (Ctrl-U)
+        self.bind("<Control-u>", self.submit_unknown)
 
         # Open web interface shortcut
         self.bind("<Control-o>", self.open_web_interface)
@@ -328,7 +330,17 @@ class AWAskAwayDialog(simpledialog.Dialog):
 
     # If you want to retrieve the entered text when the dialog closes:
     def apply(self):
-        self.result = self.entry.get().strip()
+        text = self.entry.get().strip()
+        if not text:
+            # Don't accept blank entries - show error and keep dialog open
+            messagebox.showerror("Empty Entry", "Please enter a description of what you were doing, or click 'Unknown' to mark as unknown.")
+            return  # Don't close dialog
+        self.result = text
+
+    def submit_unknown(self, event=None):  # noqa: ARG002
+        """Quick dismiss as UNKNOWN."""
+        self.result = "UNKNOWN"
+        self.cancel()
 
     def open_config(self, event=None):  # noqa: ARG002
         ConfigDialog(self)
@@ -355,13 +367,17 @@ class AWAskAwayDialog(simpledialog.Dialog):
     def buttonbox(self):
         """The buttons at the bottom of the dialog.
 
-        This is overridden to add Split and Settings buttons.
+        This is overridden to add Split, Unknown, and Settings buttons.
         """
         box = ttk.Frame(self)
 
         w = ttk.Button(box, text="OK", width=10, command=self.ok, default=tk.ACTIVE)
         w.pack(side=tk.LEFT, padx=5, pady=5)
         w = ttk.Button(box, text="Cancel", width=10, command=self.cancel_with_snooze)
+        w.pack(side=tk.LEFT, padx=5, pady=5)
+
+        # Unknown button - quick dismiss for forgotten activities (Ctrl-U)
+        w = ttk.Button(box, text="Unknown", width=10, command=self.submit_unknown)
         w.pack(side=tk.LEFT, padx=5, pady=5)
 
         # Split button (only show if afk_start and afk_duration_seconds are provided)
