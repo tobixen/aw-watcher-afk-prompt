@@ -4,7 +4,7 @@ from datetime import datetime, timezone, timedelta
 
 import pytest
 
-from aw_watcher_ask_away.utils import LOCAL_TIMEZONE, format_time_local
+from aw_watcher_ask_away.utils import LOCAL_TIMEZONE, format_duration, format_time_local
 
 
 class TestFormatTimeLocal:
@@ -63,3 +63,37 @@ class TestFormatTimeLocal:
         is_12h_1 = "AM" in result1 or "PM" in result1
         is_12h_2 = "AM" in result2 or "PM" in result2
         assert is_12h_1 == is_12h_2
+
+
+class TestFormatDuration:
+    """Tests for the format_duration function."""
+
+    def test_minutes_only(self) -> None:
+        """Test durations less than an hour show just minutes."""
+        assert format_duration(timedelta(minutes=45)) == "45 minutes"
+        assert format_duration(timedelta(minutes=5)) == "5 minutes"
+        assert format_duration(timedelta(minutes=1)) == "1 minute"
+
+    def test_hours_and_minutes(self) -> None:
+        """Test durations between 1 and 24 hours show hours and minutes."""
+        assert format_duration(timedelta(hours=2, minutes=30)) == "2 hours 30 minutes"
+        assert format_duration(timedelta(hours=1, minutes=0)) == "1 hour"
+        assert format_duration(timedelta(hours=1, minutes=1)) == "1 hour 1 minute"
+        assert format_duration(timedelta(hours=5, minutes=15)) == "5 hours 15 minutes"
+
+    def test_days_and_hours(self) -> None:
+        """Test very long durations show days and hours."""
+        assert format_duration(timedelta(days=1, hours=3)) == "1 day 3 hours"
+        assert format_duration(timedelta(days=2, hours=0)) == "2 days"
+        assert format_duration(timedelta(days=1, hours=1)) == "1 day 1 hour"
+        assert format_duration(timedelta(hours=27, minutes=23)) == "1 day 3 hours"
+
+    def test_accepts_float_seconds(self) -> None:
+        """Test that float seconds are accepted as input."""
+        assert format_duration(2700.0) == "45 minutes"  # 45 * 60
+        assert format_duration(5400.0) == "1 hour 30 minutes"  # 90 * 60
+
+    def test_1643_minutes_example(self) -> None:
+        """Test the specific case from the bug report (1643 minutes)."""
+        result = format_duration(timedelta(minutes=1643))
+        assert result == "1 day 3 hours"

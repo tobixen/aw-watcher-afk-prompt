@@ -2,8 +2,49 @@
 
 import datetime
 import locale
+from datetime import timedelta
 
 LOCAL_TIMEZONE = datetime.datetime.now().astimezone().tzinfo
+
+
+def format_duration(duration: timedelta | float) -> str:
+    """Format a duration in a human-readable way.
+
+    Shows minutes for short durations, hours and minutes for medium durations,
+    and days and hours for very long durations.
+
+    Args:
+        duration: Either a timedelta or total seconds as a float
+
+    Returns:
+        Formatted duration string (e.g., "45 minutes", "2 hours 30 minutes", "1 day 3 hours")
+    """
+    if isinstance(duration, timedelta):
+        total_seconds = duration.total_seconds()
+    else:
+        total_seconds = duration
+
+    total_minutes = int(total_seconds // 60)
+
+    if total_minutes < 60:
+        return f"{total_minutes} minute{'s' if total_minutes != 1 else ''}"
+
+    hours = total_minutes // 60
+    minutes = total_minutes % 60
+
+    if hours < 24:
+        parts = [f"{hours} hour{'s' if hours != 1 else ''}"]
+        if minutes > 0:
+            parts.append(f"{minutes} minute{'s' if minutes != 1 else ''}")
+        return " ".join(parts)
+
+    days = hours // 24
+    hours = hours % 24
+
+    parts = [f"{days} day{'s' if days != 1 else ''}"]
+    if hours > 0:
+        parts.append(f"{hours} hour{'s' if hours != 1 else ''}")
+    return " ".join(parts)
 
 
 def format_time_local(dt: datetime.datetime, include_seconds: bool = False) -> str:

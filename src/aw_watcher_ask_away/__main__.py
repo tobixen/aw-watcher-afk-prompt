@@ -18,14 +18,14 @@ from aw_watcher_ask_away.core import (
     AWWatcherAskAwayError,
     logger,
 )
-from aw_watcher_ask_away.utils import format_time_local
+from aw_watcher_ask_away.utils import format_duration, format_time_local
 
 
 def prompt(event: aw_core.Event, recent_events: Iterable[aw_core.Event]) -> str | None:
     # TODO: Allow for customizing the prompt from the prompt interface.
     start_time_str = format_time_local(event.timestamp)
     end_time_str = format_time_local(event.timestamp + event.duration)
-    prompt_text = f"What were you doing from {start_time_str} - {end_time_str} ({event.duration.seconds / 60:.1f} minutes)?"
+    prompt_text = f"What were you doing from {start_time_str} - {end_time_str} ({format_duration(event.duration)})?"
     title = "AFK Checkin"
 
     # Pass afk_start and afk_duration_seconds to enable Split button
@@ -164,7 +164,7 @@ def main() -> None:
 
         start_time_str = format_time_local(test_start)
         end_time_str = format_time_local(test_start + timedelta(seconds=test_duration_seconds))
-        test_prompt = f"What were you doing from {start_time_str} - {end_time_str} ({args.test_dialog_duration:.1f} minutes)?"
+        test_prompt = f"What were you doing from {start_time_str} - {end_time_str} ({format_duration(test_duration_seconds)})?"
         title = "AFK Checkin (TEST MODE)"
 
         # Show dialog with split mode support
