@@ -1,5 +1,7 @@
 # AW Watcher Ask Away
 
+This is a fork of [Jeremiah-England/aw-watcher-ask-away](https://github.com/Jeremiah-England/aw-watcher-ask-away), the upstream watcher seems to be abandoned.  The "aw-watcher-ask-away" on PyPI is the older Jeremiah-England version.
+
 [![PyPI - Version](https://img.shields.io/pypi/v/aw-watcher-ask-away.svg)](https://pypi.org/project/aw-watcher-ask-away)
 [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/aw-watcher-ask-away.svg)](https://pypi.org/project/aw-watcher-ask-away)
 
