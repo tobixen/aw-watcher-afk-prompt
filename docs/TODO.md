@@ -4,14 +4,6 @@ This document tracks planned improvements, known issues, and future work for the
 
 ## High Priority
 
-### Distribution & Installation
-- [ ] Use `pyinstaller` or similar for binary distribution
-  - Target non-developer users who don't know PyPI
-  - Consider creating installers for Windows, macOS, Linux
-- [ ] Set up a website and documentation
-  - Consider GitHub organization for better visibility
-  - Provide installation guides and tutorials
-
 ### User Experience Improvements
 - [ ] Handle video calls better
   - Stop asking every few minutes during active calls
@@ -22,6 +14,12 @@ This document tracks planned improvements, known issues, and future work for the
   - Implement proper multi-monitor support (dialog.py:175)
 
 ## Medium Priority
+
+### Manual operations
+
+* The logic in aw-watcher-ask-away should possibly also be applicable when not-afk.
+* aw-export-timewarrior: Should consider to ask for activity when the hints in the acticitywatcher data is weak
+* Should be easy to specify that "activity with tags X today was Y".  Like, feh was used for sorting inventory, etc.
 
 ### Dialog & UI Enhancements
 - [ ] Allow customizing the prompt from the prompt interface (__main__.py:25)
@@ -40,12 +38,13 @@ This document tracks planned improvements, known issues, and future work for the
   - Implement inline editing
 
 ### Code Quality
-- [ ] Wrap Entry widget for reuse across dialogs (dialog.py:215)
-  - Create reusable component with keyboard shortcuts
-  - Standardize behavior across all dialogs
-- [ ] Investigate why aw-watcher-afk uses queued=True (core.py:92)
-  - Determine if we should also use it
-  - Document the reasoning
+- [x] Wrap Entry widget for reuse across dialogs (dialog.py:215)
+  - Created EnhancedEntry widget in widgets.py with keyboard shortcuts
+  - Used in AWAskAwayDialog, BatchEditDialog, and split_dialog.py
+- [x] Investigate why aw-watcher-afk uses queued=True (core.py:186)
+  - queued=True enables persistent request queue for reliability
+  - Bucket creation is queued and retried if server is temporarily down
+  - Added queued=True to match pattern used by other watchers
 
 ## Low Priority / Future Considerations
 
@@ -102,6 +101,17 @@ This document tracks planned improvements, known issues, and future work for the
   - [x] Unit and integration tests
 - [x] --test-dialog flag for UI testing
 - [x] Systemd service configuration
+- [x] Wrap Entry widget for reuse across dialogs
+  - [x] Created EnhancedEntry in widgets.py
+  - [x] Added keyboard shortcuts (Ctrl+Backspace, Ctrl+w)
+  - [x] Used in all dialogs for consistent behavior
+- [x] Investigated and implemented queued=True for reliability
+
+### Distribution & Installation
+- [ ] Set up a website and documentation
+  - Consider GitHub organization for better visibility
+  - Provide installation guides and tutorials
+
 
 ## Ideas / Discussion Needed
 

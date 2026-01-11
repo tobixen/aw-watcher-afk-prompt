@@ -10,6 +10,8 @@ from tkinter import messagebox, simpledialog, ttk
 
 import appdirs
 
+from aw_watcher_ask_away.widgets import EnhancedEntry
+
 logger = logging.getLogger(__name__)
 
 root = tk.Tk()
@@ -197,8 +199,8 @@ class AWAskAwayDialog(simpledialog.Dialog):
         w = ttk.Label(master, text=self.prompt, justify=tk.LEFT)
         w.grid(row=0, padx=5, sticky=tk.W)
 
-        # Input field
-        self.entry = ttk.Entry(master, name="entry", width=40)
+        # Input field (EnhancedEntry provides Ctrl+Backspace and Ctrl+w shortcuts)
+        self.entry = EnhancedEntry(master, name="entry", width=40)
         self.entry.grid(row=1, padx=5, sticky=tk.W + tk.E)
 
         # README link
@@ -210,11 +212,6 @@ class AWAskAwayDialog(simpledialog.Dialog):
         issue_label = ttk.Label(master, text="Report an issue", foreground="blue", cursor="hand2", justify=tk.RIGHT)
         issue_label.grid(row=1, padx=5, sticky=tk.W, column=1)
         issue_label.bind("<Button-1>", self.open_an_issue)
-
-        # Text editing shortcuts
-        # TODO: Wrap the Entry widget so we can reuse these in other dialogs.
-        self.bind("<Control-BackSpace>", self.remove_word)
-        self.bind("<Control-w>", self.remove_word)
 
         # Quick dismiss as UNKNOWN (Ctrl-U)
         self.bind("<Control-u>", self.submit_unknown)
@@ -295,8 +292,7 @@ class AWAskAwayDialog(simpledialog.Dialog):
             self.entry.insert(before_index, abbreviations[abbr.group(1)])
 
     def set_text(self, text: str):
-        self.entry.delete(0, tk.END)
-        self.entry.insert(0, text)
+        self.entry.set_text(text)
 
     def previous_entry(self, event=None):  # noqa: ARG002
         if not self.history:
@@ -318,14 +314,6 @@ class AWAskAwayDialog(simpledialog.Dialog):
 
     def open_web_interface(self, event=None):  # noqa: ARG002
         open_link("http://localhost:5600/#/timeline")
-
-    def remove_word(self, event=None):  # noqa: ARG002
-        text = self.entry.get()
-        cursor_index = self.entry.index(tk.INSERT)
-        new_before = re.sub(r"\w+\W*$", "", text[:cursor_index])
-
-        self.entry.delete(0, cursor_index)
-        self.entry.insert(0, new_before)
 
     def remove_to_start(self, event=None):  # noqa: ARG002
         """Remove text from cursor to start of line (Ctrl-Shift-U can be used instead)."""
@@ -467,7 +455,7 @@ class BatchEditDialog(simpledialog.Dialog):
                 row=row, column=1, padx=5, pady=2, sticky="w"
             )
 
-            entry = ttk.Entry(scrollable_frame, width=50)
+            entry = EnhancedEntry(scrollable_frame, width=50)
             entry.insert(0, current_msg)
             entry.grid(row=row, column=2, padx=5, pady=2, sticky="ew")
             self.entries.append(entry)

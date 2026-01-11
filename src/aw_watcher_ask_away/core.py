@@ -183,8 +183,10 @@ class AWAskAwayClient:
         self.history_limit = history_limit
 
         if self.bucket_id not in self._all_buckets:
-            # TODO: Look into why aw-watcher-afk uses queued=True here.
-            client.create_bucket(self.bucket_id, event_type="afktask")
+            # Use queued=True for reliability: if aw-server is temporarily down,
+            # the bucket creation request will be queued and retried automatically.
+            # This matches the pattern used by aw-watcher-afk and aw-watcher-window.
+            client.create_bucket(self.bucket_id, event_type="afktask", queued=True)
 
         # Initialize persistent seen events store
         self.seen_store = SeenEventsStore()
