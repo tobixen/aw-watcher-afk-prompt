@@ -9,16 +9,16 @@ from aw_client.client import ActivityWatchClient
 from aw_core.log import setup_logging
 from requests.exceptions import ConnectionError
 
-import aw_watcher_ask_away.dialog as aw_dialog
-from aw_watcher_ask_away.config import load_config
-from aw_watcher_ask_away.core import (
+import aw_watcher_afk_prompt.dialog as aw_dialog
+from aw_watcher_afk_prompt.config import load_config
+from aw_watcher_afk_prompt.core import (
     DATA_KEY,
     WATCHER_NAME,
-    AWAskAwayClient,
-    AWWatcherAskAwayError,
+    AWAfkPromptClient,
+    AWAfkPromptError,
     logger,
 )
-from aw_watcher_ask_away.utils import format_duration, format_time_local
+from aw_watcher_afk_prompt.utils import format_duration, format_time_local
 
 
 def prompt(event: aw_core.Event, recent_events: Iterable[aw_core.Event]) -> str | None:
@@ -60,21 +60,21 @@ def parse_date(date_str: str):
 
 
 def get_state_retries(client: ActivityWatchClient, enable_lid_events: bool = True,
-                      history_limit: int = 100) -> AWAskAwayClient:
+                      history_limit: int = 100) -> AWAfkPromptClient:
     """When the computer is starting up sometimes the aw-server is not ready for requests yet.
 
     So we sit and retry for a while before giving up.
     """
     for _ in range(10):
         try:
-            # This works because the constructor of AWAskAwayState tries to get bucket names.
+            # This works because the constructor of AWAfkPromptState tries to get bucket names.
             # If it didn't we'd need to do something else here.
-            return AWAskAwayClient(client, enable_lid_events=enable_lid_events,
+            return AWAfkPromptClient(client, enable_lid_events=enable_lid_events,
                                    history_limit=history_limit)
         except ConnectionError:
             logger.exception("Cannot connect to client.")
             time.sleep(10)  # 10 * 10 = wait for 100s before giving up.
-    raise AWWatcherAskAwayError("Could not get a connection to the server.")
+    raise AWAfkPromptError("Could not get a connection to the server.")
 
 
 def main() -> None:
@@ -156,7 +156,7 @@ def main() -> None:
     # Test dialog mode - show dialog immediately for UI testing
     if args.test_dialog:
         from datetime import datetime, timedelta, UTC
-        import aw_watcher_ask_away.dialog as aw_dialog
+        import aw_watcher_afk_prompt.dialog as aw_dialog
 
         # Create test AFK event data
         test_start = datetime.now(UTC) - timedelta(minutes=args.test_dialog_duration)
@@ -197,7 +197,7 @@ def main() -> None:
     if args.edit:
         from datetime import datetime, UTC
         import aw_transform
-        from aw_watcher_ask_away.dialog import ask_batch_edit
+        from aw_watcher_afk_prompt.dialog import ask_batch_edit
 
         try:
             start_date, end_date = parse_date(args.edit_date)

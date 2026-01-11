@@ -10,7 +10,7 @@ from tkinter import messagebox, simpledialog, ttk
 
 import appdirs
 
-from aw_watcher_ask_away.widgets import EnhancedEntry
+from aw_watcher_afk_prompt.widgets import EnhancedEntry
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ class _AbbreviationStore(UserDict[str, str]):
 
     def __init__(self, *args, **kwargs):
         super().__init__(self, *args, **kwargs)
-        config_dir = Path(appdirs.user_config_dir("aw-watcher-ask-away"))
+        config_dir = Path(appdirs.user_config_dir("aw-watcher-afk-prompt"))
         config_dir.mkdir(parents=True, exist_ok=True)
         self._config_file = config_dir / "abbreviations.json"
         self._load_from_config()
@@ -176,7 +176,7 @@ abbreviations = _AbbreviationStore()
 
 # TODO: This widget pops up off-center when using multiple screes on Linux, possibly other platforms.
 # See https://stackoverflow.com/questions/30312875/tkinter-winfo-screenwidth-when-used-with-dual-monitors/57866046#57866046
-class AWAskAwayDialog(simpledialog.Dialog):
+class AWAfkPromptDialog(simpledialog.Dialog):
     def __init__(self, title: str, prompt: str, history: list[str],
                  afk_start=None, afk_duration_seconds=None) -> None:
         self.prompt = prompt
@@ -307,10 +307,10 @@ class AWAskAwayDialog(simpledialog.Dialog):
         self.set_text(self.history[self.history_index])
 
     def open_an_issue(self, event=None):  # noqa: ARG002
-        open_link("https://github.com/Jeremiah-England/aw-watcher-ask-away/issues/new")
+        open_link("https://github.com/tobixen/aw-watcher-afk-prompt/issues/new")
 
     def open_readme(self, event=None):  # noqa: ARG002
-        open_link("https://github.com/Jeremiah-England/aw-watcher-ask-away#aw-watcher-ask-away")
+        open_link("https://github.com/tobixen/aw-watcher-afk-prompt#aw-watcher-afk-prompt")
 
     def open_web_interface(self, event=None):  # noqa: ARG002
         open_link("http://localhost:5600/#/timeline")
@@ -524,7 +524,7 @@ def ask_string(title: str, prompt: str, history: list[str],
     # Loop to handle switching between single and split modes
     initial_text = initial_value
     while True:
-        d = AWAskAwayDialog(title, prompt, history, afk_start, afk_duration_seconds)
+        d = AWAfkPromptDialog(title, prompt, history, afk_start, afk_duration_seconds)
 
         # Pre-fill with initial value or text from split mode
         if initial_text:
@@ -533,12 +533,12 @@ def ask_string(title: str, prompt: str, history: list[str],
             initial_text = None
 
         # Wait for dialog to close
-        # (AWAskAwayDialog.__init__ calls wait_window internally via Dialog.__init__)
+        # (AWAfkPromptDialog.__init__ calls wait_window internally via Dialog.__init__)
 
         # Check if user clicked Split button
         if d.split_mode:
             # Import here to avoid circular dependency
-            from aw_watcher_ask_away.split_dialog import ask_split_activities
+            from aw_watcher_afk_prompt.split_dialog import ask_split_activities
 
             # Show split dialog
             result = ask_split_activities(title, prompt, afk_start,

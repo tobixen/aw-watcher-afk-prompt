@@ -5,8 +5,8 @@ from unittest.mock import Mock
 
 import aw_core
 
-from aw_watcher_ask_away.core import AWAskAwayClient
-from aw_watcher_ask_away.split_dialog import ActivityLine
+from aw_watcher_afk_prompt.core import AWAfkPromptClient
+from aw_watcher_afk_prompt.split_dialog import ActivityLine
 
 
 def test_post_split_events_creates_multiple_events() -> None:
@@ -16,13 +16,13 @@ def test_post_split_events_creates_multiple_events() -> None:
     mock_client.client_hostname = "test_host"
     mock_client.get_buckets.return_value = {
         "aw-watcher-afk_test_host": {"type": "afkstatus"},
-        "aw-watcher-ask-away_test_host": {"type": "afktask"},
+        "aw-watcher-afk-prompt_test_host": {"type": "afktask"},
     }
     mock_client.get_events.return_value = []
     mock_client.insert_event = Mock()
 
     # Create client wrapper
-    client = AWAskAwayClient(mock_client, enable_lid_events=False)
+    client = AWAfkPromptClient(mock_client, enable_lid_events=False)
 
     # Create test AFK event
     original_start = datetime(2025, 1, 15, 14, 0, 0, tzinfo=UTC)
@@ -72,12 +72,12 @@ def test_post_split_events_preserves_timestamps() -> None:
     mock_client.client_hostname = "test_host"
     mock_client.get_buckets.return_value = {
         "aw-watcher-afk_test_host": {"type": "afkstatus"},
-        "aw-watcher-ask-away_test_host": {"type": "afktask"},
+        "aw-watcher-afk-prompt_test_host": {"type": "afktask"},
     }
     mock_client.get_events.return_value = []
     mock_client.insert_event = Mock()
 
-    client = AWAskAwayClient(mock_client, enable_lid_events=False)
+    client = AWAfkPromptClient(mock_client, enable_lid_events=False)
 
     original_start = datetime(2025, 1, 15, 14, 0, 0, tzinfo=UTC)
     original_event = aw_core.Event(
@@ -122,12 +122,12 @@ def test_post_split_events_marks_original_as_seen_on_success() -> None:
     mock_client.client_hostname = "test_host"
     mock_client.get_buckets.return_value = {
         "aw-watcher-afk_test_host": {"type": "afkstatus"},
-        "aw-watcher-ask-away_test_host": {"type": "afktask"},
+        "aw-watcher-afk-prompt_test_host": {"type": "afktask"},
     }
     mock_client.get_events.return_value = []
     mock_client.insert_event = Mock()  # All succeed
 
-    client = AWAskAwayClient(mock_client, enable_lid_events=False)
+    client = AWAfkPromptClient(mock_client, enable_lid_events=False)
 
     original_start = datetime(2025, 1, 15, 14, 0, 0, tzinfo=UTC)
     original_event = aw_core.Event(
@@ -157,7 +157,7 @@ def test_post_split_events_does_not_mark_seen_on_partial_failure() -> None:
     mock_client.client_hostname = "test_host"
     mock_client.get_buckets.return_value = {
         "aw-watcher-afk_test_host": {"type": "afkstatus"},
-        "aw-watcher-ask-away_test_host": {"type": "afktask"},
+        "aw-watcher-afk-prompt_test_host": {"type": "afktask"},
     }
     mock_client.get_events.return_value = []
 
@@ -168,7 +168,7 @@ def test_post_split_events_does_not_mark_seen_on_partial_failure() -> None:
 
     mock_client.insert_event = Mock(side_effect=insert_side_effect)
 
-    client = AWAskAwayClient(mock_client, enable_lid_events=False)
+    client = AWAfkPromptClient(mock_client, enable_lid_events=False)
 
     original_start = datetime(2025, 1, 15, 14, 0, 0, tzinfo=UTC)
     original_event = aw_core.Event(
@@ -198,12 +198,12 @@ def test_post_split_events_split_id_based_on_timestamp() -> None:
     mock_client.client_hostname = "test_host"
     mock_client.get_buckets.return_value = {
         "aw-watcher-afk_test_host": {"type": "afkstatus"},
-        "aw-watcher-ask-away_test_host": {"type": "afktask"},
+        "aw-watcher-afk-prompt_test_host": {"type": "afktask"},
     }
     mock_client.get_events.return_value = []
     mock_client.insert_event = Mock()
 
-    client = AWAskAwayClient(mock_client, enable_lid_events=False)
+    client = AWAfkPromptClient(mock_client, enable_lid_events=False)
 
     # Use a specific timestamp
     original_start = datetime(2025, 1, 15, 14, 30, 45, tzinfo=UTC)
@@ -236,12 +236,12 @@ def test_post_split_events_with_seconds() -> None:
     mock_client.client_hostname = "test_host"
     mock_client.get_buckets.return_value = {
         "aw-watcher-afk_test_host": {"type": "afkstatus"},
-        "aw-watcher-ask-away_test_host": {"type": "afktask"},
+        "aw-watcher-afk-prompt_test_host": {"type": "afktask"},
     }
     mock_client.get_events.return_value = []
     mock_client.insert_event = Mock()
 
-    client = AWAskAwayClient(mock_client, enable_lid_events=False)
+    client = AWAfkPromptClient(mock_client, enable_lid_events=False)
 
     original_start = datetime(2025, 1, 15, 14, 0, 0, tzinfo=UTC)
     original_event = aw_core.Event(

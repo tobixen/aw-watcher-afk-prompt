@@ -1,4 +1,4 @@
-"""Configuration management for aw-watcher-ask-away."""
+"""Configuration management for aw-watcher-afk-prompt."""
 
 from aw_core.config import load_config_toml
 
@@ -35,6 +35,6 @@ backfill_depth = 1440
 def load_config() -> dict:
     """Load configuration using ActivityWatch standard approach.
 
-    Config location: ~/.config/activitywatch/aw-watcher-ask-away/aw-watcher-ask-away.toml
+    Config location: ~/.config/activitywatch/aw-watcher-afk-prompt/aw-watcher-afk-prompt.toml
     """
-    return load_config_toml("aw-watcher-ask-away", DEFAULT_CONFIG)
+    return load_config_toml("aw-watcher-afk-prompt", DEFAULT_CONFIG)

@@ -6,21 +6,21 @@ from itertools import pairwise
 import aw_transform
 from aw_client.client import ActivityWatchClient
 
-from aw_watcher_ask_away.core import AWAskAwayClient
+from aw_watcher_afk_prompt.core import AWAfkPromptClient
 
 
 @cache
 def get_client():
-    return ActivityWatchClient("aw-watcher-ask-away-debugger")
+    return ActivityWatchClient("aw-watcher-afk-prompt-debugger")
 
 
 def find_overlapping_events():
-    """Find overlapping aw-watcher-ask-away events.
+    """Find overlapping aw-watcher-afk-prompt events.
 
     If any of these exist it means the user was asked for something twice which is annoying and should be fixed.
     """
     with get_client() as client:
-        state = AWAskAwayClient(client)
+        state = AWAfkPromptClient(client)
         for e1, e2 in pairwise(aw_transform.sort_by_timestamp(client.get_events(state.bucket_id, limit=100))):
             if e1.timestamp + e1.duration > e2.timestamp:
                 print("---" * 10)

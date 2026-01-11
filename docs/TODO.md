@@ -1,6 +1,6 @@
-# TODO List for aw-watcher-ask-away
+# TODO List for aw-watcher-afk-prompt
 
-This document tracks planned improvements, known issues, and future work for the aw-watcher-ask-away project.
+This document tracks planned improvements, known issues, and future work for the aw-watcher-afk-prompt project.
 
 ## High Priority
 
@@ -17,7 +17,7 @@ This document tracks planned improvements, known issues, and future work for the
 
 ### Manual operations
 
-* The logic in aw-watcher-ask-away should possibly also be applicable when not-afk.
+* The logic in aw-watcher-afk-prompt should possibly also be applicable when not-afk.
 * aw-export-timewarrior: Should consider to ask for activity when the hints in the acticitywatcher data is weak
 * Should be easy to specify that "activity with tags X today was Y".  Like, feh was used for sorting inventory, etc.
 

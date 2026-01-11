@@ -19,23 +19,11 @@ help:
 	@echo "Only enable-service and setup-wayland has been tested, the latter with sway"
 
 install:
-	@command -v pipx >/dev/null 2>&1 || { \
-		echo "Error: pipx is not installed"; \
-		echo ""; \
-		echo "Please install pipx first:"; \
-		echo "  https://pypa.github.io/pipx/installation/"; \
-		echo ""; \
-		echo "Quick install options:"; \
-		echo "  - Arch Linux: sudo pacman -S python-pipx"; \
-		echo "  - Debian/Ubuntu: sudo apt install pipx"; \
-		echo "  - Fedora: sudo dnf install pipx"; \
-		echo "  - macOS: brew install pipx"; \
-		echo "  - pip: python3 -m pip install --user pipx"; \
-		exit 1; \
-	}
-	pipx install .
+	pip install --user .
 	@echo ""
-	@echo "✓ aw-watcher-ask-away installed successfully!"
+	@echo "✓ aw-watcher-afk-prompt installed successfully!"
+	@echo ""
+	@echo "Make sure ~/.local/bin is in your PATH."
 	@echo ""
 	@echo "Next steps:"
 	@echo "  1. Recommended: Use aw-qt (ActivityWatch GUI)"
@@ -48,7 +36,7 @@ install:
 	@echo "     make setup-wayland"
 	@echo ""
 	@echo "  4. Test manually:"
-	@echo "     aw-watcher-ask-away"
+	@echo "     aw-watcher-afk-prompt"
 	@echo ""
 
 install-dev:
@@ -59,8 +47,8 @@ install-all: install enable-service
 	@echo "✓ Installation complete!"
 	@echo "  The watcher is now installed and running as a systemd service."
 	@echo ""
-	@echo "Check status with: systemctl --user status aw-watcher-ask-away"
-	@echo "View logs with:    journalctl --user -u aw-watcher-ask-away -f"
+	@echo "Check status with: systemctl --user status aw-watcher-afk-prompt"
+	@echo "View logs with:    journalctl --user -u aw-watcher-afk-prompt -f"
 	@echo ""
 	@echo "Note: Wayland users should also run: make setup-wayland"
 
@@ -84,29 +72,29 @@ clean:
 install-service:
 	@echo "Installing systemd user service..."
 	mkdir -p ~/.config/systemd/user
-	cp misc/aw-watcher-ask-away.service ~/.config/systemd/user/
+	cp misc/aw-watcher-afk-prompt.service ~/.config/systemd/user/
 	systemctl --user daemon-reload
 	@echo "Service installed. Use 'make enable-service' to enable and start it."
 
 uninstall-service:
 	@echo "Uninstalling systemd user service..."
-	systemctl --user stop aw-watcher-ask-away 2>/dev/null || true
-	systemctl --user disable aw-watcher-ask-away 2>/dev/null || true
-	rm -f ~/.config/systemd/user/aw-watcher-ask-away.service
+	systemctl --user stop aw-watcher-afk-prompt 2>/dev/null || true
+	systemctl --user disable aw-watcher-afk-prompt 2>/dev/null || true
+	rm -f ~/.config/systemd/user/aw-watcher-afk-prompt.service
 	systemctl --user daemon-reload
 	@echo "Service uninstalled."
 
 enable-service: install-service
 	@echo "Enabling and starting service..."
-	systemctl --user enable aw-watcher-ask-away
-	systemctl --user start aw-watcher-ask-away
+	systemctl --user enable aw-watcher-afk-prompt
+	systemctl --user start aw-watcher-afk-prompt
 	@echo "Service status:"
-	@systemctl --user status aw-watcher-ask-away --no-pager
+	@systemctl --user status aw-watcher-afk-prompt --no-pager
 
 disable-service:
 	@echo "Disabling and stopping service..."
-	systemctl --user stop aw-watcher-ask-away
-	systemctl --user disable aw-watcher-ask-away
+	systemctl --user stop aw-watcher-afk-prompt
+	systemctl --user disable aw-watcher-afk-prompt
 	@echo "Service disabled."
 
 setup-wayland: enable-service
@@ -148,15 +136,15 @@ setup-wayland: enable-service
 	fi
 	@echo ""
 	@echo "Restarting service to pick up environment changes..."
-	@systemctl --user restart aw-watcher-ask-away 2>/dev/null || echo "Note: Service restart will happen after compositor reload"
+	@systemctl --user restart aw-watcher-afk-prompt 2>/dev/null || echo "Note: Service restart will happen after compositor reload"
 	@echo ""
 	@echo "⚠ IMPORTANT: The environment variable will only be available after:"
 	@echo "  1. Reloading your compositor config, OR"
 	@echo "  2. Logging out and back in"
 	@echo ""
 	@echo "After that, verify the service is working:"
-	@echo "  systemctl --user status aw-watcher-ask-away"
+	@echo "  systemctl --user status aw-watcher-afk-prompt"
 
 uninstall:
-	pipx uninstall aw-watcher-ask-away 2>/dev/null || true
+	pip uninstall -y aw-watcher-afk-prompt 2>/dev/null || true
 	@echo "Package uninstalled."

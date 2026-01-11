@@ -1,4 +1,4 @@
-"""Reusable UI widgets for aw-watcher-ask-away.
+"""Reusable UI widgets for aw-watcher-afk-prompt.
 
 This module contains shared widget classes that provide consistent
 behavior across all dialogs in the application.

@@ -1,33 +1,38 @@
-# AW Watcher Ask Away
+# AW Watcher AFK Prompt
 
-This is a fork of [Jeremiah-England/aw-watcher-ask-away](https://github.com/Jeremiah-England/aw-watcher-ask-away), the upstream watcher seems to be abandoned.  The "aw-watcher-ask-away" on PyPI is the older Jeremiah-England version.
-
-[![PyPI - Version](https://img.shields.io/pypi/v/aw-watcher-ask-away.svg)](https://pypi.org/project/aw-watcher-ask-away)
-[![PyPI - Python Version](https://img.shields.io/pypi/pyversions/aw-watcher-ask-away.svg)](https://pypi.org/project/aw-watcher-ask-away)
+[![PyPI - Version](https://img.shields.io/pypi/v/aw-watcher-afk-prompt.svg)](https://pypi.org/project/aw-watcher-afk-prompt)
+[![PyPI - Python Version](https://img.shields.io/pypi/pyversions/aw-watcher-afk-prompt.svg)](https://pypi.org/project/aw-watcher-afk-prompt)
 
 ---
 
-This [ActivityWatch](https://activitywatch.net) "watcher" asks you what you were doing in a pop-up dialogue when you get back to your computer from an AFK (away from keyboard) break.
+This [ActivityWatch](https://activitywatch.net) "watcher" prompts you with a dialog when you return from an AFK (away from keyboard) break, asking what you were doing.
 
 ## Installation
 
+Install through pip or pipx or clone the repository and install using the Makefile:
+
 ```console
-pipx install aw-watcher-ask-away
+git clone https://github.com/tobixen/aw-watcher-afk-prompt.git
+cd aw-watcher-afk-prompt
+make install
 ```
 
-([Need to install `pipx` first?](https://pypa.github.io/pipx/installation/))
+For a complete setup including systemd service:
+```console
+make install-all
+```
 
 ## Running
 
 ### Recommended: Using aw-qt
 
-The recommended way to run this watcher is through [aw-qt](https://github.com/ActivityWatch/aw-qt), which manages both the server and watchers automatically. After installing aw-watcher-ask-away, aw-qt should detect and start it automatically.
+The recommended way to run this watcher is through [aw-qt](https://github.com/ActivityWatch/aw-qt), which manages both the server and watchers automatically. After installing aw-watcher-afk-prompt, aw-qt should detect and start it automatically.
 
 ### Alternative: Manual Start
 
 If not using aw-qt, you can run it manually:
 ```console
-aw-watcher-ask-away
+aw-watcher-afk-prompt
 ```
 
 Make sure `aw-server` and `aw-watcher-afk` are running first, as this watcher monitors AFK events.
@@ -56,7 +61,7 @@ The watcher can be configured via a config file or command-line arguments. Comma
 
 Configuration is stored in the ActivityWatch standard location:
 ```
-~/.config/activitywatch/aw-watcher-ask-away/aw-watcher-ask-away.toml
+~/.config/activitywatch/aw-watcher-afk-prompt/aw-watcher-afk-prompt.toml
 ```
 
 The config file is created automatically with default values on first run if it doesn't exist.
@@ -65,7 +70,7 @@ The config file is created automatically with default values on first run if it 
 
 You can override config file settings using command-line arguments:
 ```console
-aw-watcher-ask-away --depth 15 --frequency 10 --length 3
+aw-watcher-afk-prompt --depth 15 --frequency 10 --length 3
 ```
 
 Available options:
@@ -86,7 +91,7 @@ Lid events may sometimes be more accurate than the ordinary afk watcher (particu
 **Setup:**
 1. Install aw-watcher-lid: `pipx install aw-watcher-lid`
 2. Start it (see [aw-watcher-lid README](https://github.com/tobixen/aw-watcher-lid#readme) for setup)
-3. aw-watcher-ask-away will automatically detect and use it
+3. aw-watcher-afk-prompt will automatically detect and use it
 
 **To disable lid integration:**
 I.e. if having an external keyboard it's possible to close the lid without being AFK.  Set `enable_lid_events = false` in your config file - or skip installing the aw-watcher-lid.
@@ -97,15 +102,6 @@ I.e. if having an external keyboard it's possible to close the lid without being
 
 Quite often one ends up doing multiple tasks in my afk periods, for instance it could be "lunch" for 20 minutes and "phone call" for 10 minutes.  The pop-up dialog has a **Split** button for splitting the afk time on multiple event lines.  You can add as many lines as needed and then edit either the start time or the duration of the event lines.
 
-## Roadmap
-
-Most of the improvements involve a more complicated pop-up window.
-
-- Use `pyinstaller` or something for distribution to people who are not developers and know how to install things from PyPI.
-  - Set up a website, probably with a GitHub organization.
-- Handle calls better/stop asking what you were doing every couple minutes when in a call.
-- See whether people would rather add data to AFK events instead of creating a separate bucket. Maybe make that an option/configurable.
-
 ## Contributing
 
 Here are some helpful links:
@@ -113,9 +109,10 @@ Here are some helpful links:
 - [How to create an ActivityWatch watcher](https://docs.activitywatch.net/en/latest/examples/writing-watchers.html).
 - ["Manually tracking away/offline-time" forum discussion](https://forum.activitywatch.net/t/manually-tracking-away-offline-time/284)
 
-Note: I am using this project to get experience with the `hatch` project manager.
-I have never use it before and I'm probably doing some things wrong there.
+## History
+
+This project was originally created by [Jeremiah England](https://github.com/Jeremiah-England) as `aw-watcher-ask-away`. It was forked and renamed by [Tobias Brox](https://github.com/tobixen) to `aw-watcher-afk-prompt` in 2026 due to inactive maintainer of the original project (see https://github.com/Jeremiah-England/aw-watcher-ask-away/issues/8).
 
 ## License
 
-`aw-watcher-ask-away` is distributed under the terms of the [MIT](https://spdx.org/licenses/MIT.html) license.
+`aw-watcher-afk-prompt` is distributed under the terms of the [MIT](https://spdx.org/licenses/MIT.html) license.
