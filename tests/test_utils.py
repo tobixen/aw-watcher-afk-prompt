@@ -4,7 +4,7 @@ from datetime import datetime, timezone, timedelta
 
 import pytest
 
-from aw_watcher_ask_away.utils import LOCAL_TIMEZONE, format_duration, format_time_local
+from aw_watcher_afk_prompt.utils import LOCAL_TIMEZONE, format_duration, format_time_local
 
 
 class TestFormatTimeLocal:

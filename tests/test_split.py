@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from aw_watcher_ask_away.split_dialog import (
+from aw_watcher_afk_prompt.split_dialog import (
     ActivityLine,
     SplitActivityData,
     TimeCalculator,

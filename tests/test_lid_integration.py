@@ -3,7 +3,7 @@
 import aw_core
 import pytest
 
-from aw_watcher_ask_away.core import AWWatcherAskAwayError, find_lid_bucket, is_afk
+from aw_watcher_afk_prompt.core import AWAfkPromptError, find_lid_bucket, is_afk
 
 
 def test_find_lid_bucket_found() -> None:
@@ -34,7 +34,7 @@ def test_find_lid_bucket_multiple() -> None:
         "aw-watcher-lid_hostname2": {},
     }
 
-    with pytest.raises(AWWatcherAskAwayError, match="too many lid buckets"):
+    with pytest.raises(AWAfkPromptError, match="too many lid buckets"):
         find_lid_bucket(buckets)
 
 

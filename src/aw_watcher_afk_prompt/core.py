@@ -16,21 +16,21 @@ import aw_transform
 from aw_client.client import ActivityWatchClient
 from requests.exceptions import HTTPError
 
-from aw_watcher_ask_away.utils import LOCAL_TIMEZONE, format_time_local
+from aw_watcher_afk_prompt.utils import LOCAL_TIMEZONE, format_time_local
 
 # Import ActivityLine for split mode support
 try:
-    from aw_watcher_ask_away.split_dialog import ActivityLine
+    from aw_watcher_afk_prompt.split_dialog import ActivityLine
 except ImportError:
     # Fallback if split_dialog not available
     ActivityLine = None
 
-WATCHER_NAME = "aw-watcher-ask-away"
+WATCHER_NAME = "aw-watcher-afk-prompt"
 DATA_KEY = "message"
 """What field in the event data to store the user's message in."""
 
 
-class AWWatcherAskAwayError(Exception):
+class AWAfkPromptError(Exception):
     pass
 
 
@@ -39,13 +39,20 @@ logger = logging.getLogger(__name__)
 
 
 def find_afk_bucket(buckets: dict[str, Any]) -> str:
-    match [bucket for bucket in buckets if "afk" in bucket and "lid" not in bucket]:
+    # Find aw-watcher-afk bucket, excluding our own bucket and lid bucket
+    afk_buckets = [
+        bucket for bucket in buckets
+        if "aw-watcher-afk" in bucket
+        and "lid" not in bucket
+        and "afk-prompt" not in bucket  # Exclude our own bucket
+    ]
+    match afk_buckets:
         case []:
-            raise AWWatcherAskAwayError("Cannot find the afk bucket.")
+            raise AWAfkPromptError("Cannot find the afk bucket.")
         case [bucket]:
             return bucket
         case _:
-            raise AWWatcherAskAwayError(f"Found too many afk buckets: {buckets}.")
+            raise AWAfkPromptError(f"Found too many afk buckets: {afk_buckets}.")
 
 
 def find_lid_bucket(buckets: dict[str, Any]):
@@ -58,7 +65,7 @@ def find_lid_bucket(buckets: dict[str, Any]):
         return None
     if len(lid_buckets) == 1:
         return lid_buckets[0]
-    raise AWWatcherAskAwayError(f"Found too many lid buckets: {buckets}.")
+    raise AWAfkPromptError(f"Found too many lid buckets: {buckets}.")
 
 
 def is_afk(event: aw_core.Event) -> bool:
@@ -99,7 +106,7 @@ class SeenEventsStore:
         Args:
             max_age_days: Events older than this will be cleaned up on load
         """
-        config_dir = Path(appdirs.user_config_dir("aw-watcher-ask-away"))
+        config_dir = Path(appdirs.user_config_dir("aw-watcher-afk-prompt"))
         config_dir.mkdir(parents=True, exist_ok=True)
         self._store_file = config_dir / "seen_events.json"
         self._max_age_days = max_age_days
@@ -174,7 +181,7 @@ class SeenEventsStore:
         return False
 
 
-class AWAskAwayClient:
+class AWAfkPromptClient:
     def __init__(self, client: ActivityWatchClient, enable_lid_events: bool = True,
                  history_limit: int = 100):
         self.client = client
@@ -183,10 +190,9 @@ class AWAskAwayClient:
         self.history_limit = history_limit
 
         if self.bucket_id not in self._all_buckets:
-            # Use queued=True for reliability: if aw-server is temporarily down,
-            # the bucket creation request will be queued and retried automatically.
-            # This matches the pattern used by aw-watcher-afk and aw-watcher-window.
-            client.create_bucket(self.bucket_id, event_type="afktask", queued=True)
+            # Create bucket synchronously - we need it to exist before fetching events.
+            # (queued=True would defer creation, causing 404 on the get_events call below)
+            client.create_bucket(self.bucket_id, event_type="afktask")
 
         # Initialize persistent seen events store
         self.seen_store = SeenEventsStore()
@@ -196,7 +202,7 @@ class AWAskAwayClient:
         recent_events.extend(aw_transform.sort_by_timestamp(
             client.get_events(self.bucket_id, limit=100)
         ))
-        self.state = AWAskAwayState(recent_events, self.seen_store)
+        self.state = AWAfkPromptState(recent_events, self.seen_store)
 
         self.afk_bucket_id = find_afk_bucket(self._all_buckets)
 
@@ -390,11 +396,11 @@ class AWAskAwayClient:
             return
 
 
-class AWAskAwayState:
+class AWAfkPromptState:
     def __init__(self, recent_events: Iterable[aw_core.Event],
                  seen_store: SeenEventsStore | None = None):
         self.recent_events = recent_events if isinstance(recent_events, deque) else deque(recent_events, 100)
-        """The recent events we have posted to the aw-watcher-ask-away bucket.
+        """The recent events we have posted to the aw-watcher-afk-prompt bucket.
 
         This is used to avoid asking the user to log an absence that they have already logged.
 

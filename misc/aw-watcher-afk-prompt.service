@@ -1,8 +1,8 @@
 ########################################
-# aw-watcher-ask-away.service         #
+# aw-watcher-afk-prompt.service        #
 ########################################
 #
-# This service file provides an alternative way to run aw-watcher-ask-away
+# This service file provides an alternative way to run aw-watcher-afk-prompt
 # without using aw-qt. The recommended approach is to use aw-qt, which manages
 # both the server and watchers automatically.
 #
@@ -11,14 +11,14 @@
 #
 # Prerequisites:
 # - aw-server must be installed and running
-# - aw-watcher-afk must be running (ask-away monitors AFK events)
-# - This watcher must be installed (pip install aw-watcher-ask-away)
+# - aw-watcher-afk must be running (afk-prompt monitors AFK events)
+# - This watcher must be installed (make install)
 #
 # Installation for X11 users:
-# 1. Copy service file: cp misc/aw-watcher-ask-away.service ~/.config/systemd/user/
+# 1. Copy service file: cp misc/aw-watcher-afk-prompt.service ~/.config/systemd/user/
 # 2. Reload systemd: systemctl --user daemon-reload
-# 3. Enable the service: systemctl --user enable aw-watcher-ask-away.service
-# 4. Start the service: systemctl --user start aw-watcher-ask-away.service
+# 3. Enable the service: systemctl --user enable aw-watcher-afk-prompt.service
+# 4. Start the service: systemctl --user start aw-watcher-afk-prompt.service
 #
 # Additional setup for Wayland users:
 # - Add to your compositor startup script (e.g., ~/.config/sway/config):
@@ -29,15 +29,15 @@
 #
 
 [Unit]
-Description=ActivityWatch AFK Questionnaire Watcher
-Documentation=https://github.com/Jeremiah-England/aw-watcher-ask-away
+Description=ActivityWatch AFK Prompt Watcher
+Documentation=https://github.com/tobixen/aw-watcher-afk-prompt
 After=aw-server.service
 # Ensure we run within a graphical session
 After=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=aw-watcher-ask-away
+ExecStart=aw-watcher-afk-prompt
 Restart=on-failure
 RestartSec=10
 Environment=PYTHONUNBUFFERED=1

@@ -9,13 +9,13 @@ from unittest.mock import patch
 import aw_core
 import pytest
 
-from aw_watcher_ask_away.core import SeenEventsStore
+from aw_watcher_afk_prompt.core import SeenEventsStore
 
 
 @pytest.fixture
 def temp_config_dir(tmp_path):
     """Provide a temporary config directory."""
-    config_dir = tmp_path / "aw-watcher-ask-away"
+    config_dir = tmp_path / "aw-watcher-afk-prompt"
     config_dir.mkdir(parents=True, exist_ok=True)
     with patch("appdirs.user_config_dir", return_value=str(config_dir)):
         yield config_dir

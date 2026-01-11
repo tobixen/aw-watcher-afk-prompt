@@ -1,4 +1,4 @@
-"""Utility functions for aw-watcher-ask-away."""
+"""Utility functions for aw-watcher-afk-prompt."""
 
 import datetime
 import locale

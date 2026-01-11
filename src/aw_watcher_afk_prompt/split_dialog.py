@@ -11,8 +11,8 @@ from datetime import datetime, timedelta
 from tkinter import simpledialog, ttk
 from typing import Optional
 
-from aw_watcher_ask_away.utils import format_time_local
-from aw_watcher_ask_away.widgets import EnhancedEntry
+from aw_watcher_afk_prompt.utils import format_time_local
+from aw_watcher_afk_prompt.widgets import EnhancedEntry
 
 logger = logging.getLogger(__name__)
 

@@ -2,7 +2,7 @@
 
 from unittest.mock import patch
 
-from aw_watcher_ask_away.config import DEFAULT_CONFIG, load_config
+from aw_watcher_afk_prompt.config import DEFAULT_CONFIG, load_config
 
 
 def test_default_config_has_expected_keys() -> None:
@@ -39,7 +39,7 @@ def test_default_config_values() -> None:
 def test_load_config_returns_defaults_when_no_file() -> None:
     """Test that load_config returns defaults when config file doesn't exist."""
     # Mock aw_core.config.load_config_toml to return parsed defaults
-    with patch("aw_watcher_ask_away.config.load_config_toml") as mock_load:
+    with patch("aw_watcher_afk_prompt.config.load_config_toml") as mock_load:
         import tomllib
 
         mock_load.return_value = tomllib.loads(DEFAULT_CONFIG)
@@ -47,7 +47,7 @@ def test_load_config_returns_defaults_when_no_file() -> None:
         config = load_config()
 
         # Verify load_config_toml was called with correct arguments
-        mock_load.assert_called_once_with("aw-watcher-ask-away", DEFAULT_CONFIG)
+        mock_load.assert_called_once_with("aw-watcher-afk-prompt", DEFAULT_CONFIG)
 
         # Verify returned config has expected values
         assert config["depth"] == 10.0
@@ -62,7 +62,7 @@ def test_load_config_returns_custom_values() -> None:
     """Test that load_config returns custom values when config file exists."""
     custom_config = {"depth": 15.0, "frequency": 10.0, "length": 3.0}
 
-    with patch("aw_watcher_ask_away.config.load_config_toml") as mock_load:
+    with patch("aw_watcher_afk_prompt.config.load_config_toml") as mock_load:
         mock_load.return_value = custom_config
 
         config = load_config()
