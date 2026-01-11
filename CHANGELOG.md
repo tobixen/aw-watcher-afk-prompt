@@ -11,6 +11,7 @@ Changes in this fork (tobixen/aw-watcher-ask-away) since diverging from upstream
 
 ### Added
 
+- Reusable `EnhancedEntry` widget with keyboard shortcuts (Ctrl+Backspace, Ctrl+w)
 - Config file support using `aw_core.config` for persistent settings
 - Optional lid watcher integration to detect laptop lid open/close events
 - Split AFK period feature - split a single AFK period into multiple activities
@@ -22,6 +23,10 @@ Changes in this fork (tobixen/aw-watcher-ask-away) since diverging from upstream
 - Human-readable duration display (hours/days instead of just minutes)
 - Makefile for easier installation
 - Systemd service file for running as a service
+
+### Changed
+
+- Use `queued=True` for bucket creation for reliability during server outages
 
 ### Fixed
 

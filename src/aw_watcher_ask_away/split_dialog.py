@@ -12,6 +12,7 @@ from tkinter import simpledialog, ttk
 from typing import Optional
 
 from aw_watcher_ask_away.utils import format_time_local
+from aw_watcher_ask_away.widgets import EnhancedEntry
 
 logger = logging.getLogger(__name__)
 
@@ -593,10 +594,10 @@ class ActivityLineWidget:
                     f"start={activity.start_time.strftime('%H:%M:%S')}, "
                     f"duration={activity.duration_minutes}m")
 
-        # Description field (editable)
+        # Description field (editable, EnhancedEntry provides text editing shortcuts)
         self.desc_var = tk.StringVar(master=parent, value=activity.description)
         self.desc_var.trace_add("write", lambda *args: self._on_desc_change())
-        self.desc_entry = ttk.Entry(parent, textvariable=self.desc_var, width=25)
+        self.desc_entry = EnhancedEntry(parent, textvariable=self.desc_var, width=25)
         self.desc_entry.grid(row=row, column=0, padx=5, pady=2, sticky=tk.W+tk.E)
 
         # Start time field (read-only for first, editable for others)
