@@ -45,13 +45,18 @@ def find_afk_bucket(buckets: dict[str, Any]) -> str:
         if "aw-watcher-afk" in bucket
         and "lid" not in bucket
         and "afk-prompt" not in bucket  # Exclude our own bucket
+        and "ask-away" not in bucket  # Exclude old bucket name
     ]
+    logger.debug(f"All buckets: {list(buckets.keys())}")
+    logger.debug(f"Matching AFK buckets: {afk_buckets}")
     match afk_buckets:
         case []:
-            raise AWAfkPromptError("Cannot find the afk bucket.")
+            logger.error("Cannot find the afk bucket. Is aw-watcher-afk running?")
+            raise AWAfkPromptError("Cannot find the afk bucket. Is aw-watcher-afk running?")
         case [bucket]:
             return bucket
         case _:
+            logger.error(f"Found too many afk buckets: {afk_buckets}")
             raise AWAfkPromptError(f"Found too many afk buckets: {afk_buckets}.")
 
 
