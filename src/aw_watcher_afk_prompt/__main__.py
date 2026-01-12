@@ -32,7 +32,7 @@ def prompt(event: aw_core.Event, recent_events: Iterable[aw_core.Event]) -> str 
     return aw_dialog.ask_string(
         title,
         prompt_text,
-        [event.data.get(DATA_KEY, '') for event in recent_events],
+        [event.data.get(DATA_KEY, "") for event in recent_events],
         afk_start=event.timestamp,
         afk_duration_seconds=event.duration.total_seconds()
     )
@@ -40,7 +40,7 @@ def prompt(event: aw_core.Event, recent_events: Iterable[aw_core.Event]) -> str 
 
 def parse_date(date_str: str):
     """Parse date string into start and end datetime."""
-    from datetime import datetime, timedelta, UTC
+    from datetime import UTC, datetime, timedelta
 
     today = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
 
@@ -155,7 +155,8 @@ def main() -> None:
 
     # Test dialog mode - show dialog immediately for UI testing
     if args.test_dialog:
-        from datetime import datetime, timedelta, UTC
+        from datetime import UTC, datetime, timedelta
+
         import aw_watcher_afk_prompt.dialog as aw_dialog
 
         # Create test AFK event data
@@ -195,8 +196,10 @@ def main() -> None:
 
     # Edit mode - review and edit past entries
     if args.edit:
-        from datetime import datetime, UTC
+        from datetime import UTC, datetime
+
         import aw_transform
+
         from aw_watcher_afk_prompt.dialog import ask_batch_edit
 
         try:
@@ -209,7 +212,7 @@ def main() -> None:
 
         try:
             client = ActivityWatchClient(
-                client_name=WATCHER_NAME + '_edit', testing=args.testing
+                client_name=WATCHER_NAME + "_edit", testing=args.testing
             )
             with client:
                 bucket_id = f"{WATCHER_NAME}_{client.client_hostname}"
@@ -235,7 +238,7 @@ def main() -> None:
                 # Process changes
                 edited_count = 0
                 for event, new_value in result:
-                    current_msg = event.data.get(DATA_KEY, '')
+                    current_msg = event.data.get(DATA_KEY, "")
                     if new_value != current_msg:
                         event.data[DATA_KEY] = new_value
                         client.insert_event(bucket_id, event)

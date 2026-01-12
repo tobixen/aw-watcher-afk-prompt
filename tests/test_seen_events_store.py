@@ -2,8 +2,6 @@
 
 import datetime
 import json
-import tempfile
-from pathlib import Path
 from unittest.mock import patch
 
 import aw_core

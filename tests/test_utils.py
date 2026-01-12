@@ -1,8 +1,6 @@
 """Tests for utils module."""
 
-from datetime import datetime, timezone, timedelta
-
-import pytest
+from datetime import UTC, datetime, timedelta, timezone
 
 from aw_watcher_afk_prompt.utils import LOCAL_TIMEZONE, format_duration, format_time_local
 
@@ -12,7 +10,7 @@ class TestFormatTimeLocal:
 
     def test_converts_utc_to_local(self) -> None:
         """Test that UTC times are converted to local timezone."""
-        utc_time = datetime(2025, 1, 15, 12, 30, 0, tzinfo=timezone.utc)
+        utc_time = datetime(2025, 1, 15, 12, 30, 0, tzinfo=UTC)
         result = format_time_local(utc_time)
 
         # The result should be the local time equivalent
@@ -23,7 +21,7 @@ class TestFormatTimeLocal:
 
     def test_includes_seconds_when_requested(self) -> None:
         """Test that seconds are included when include_seconds=True."""
-        utc_time = datetime(2025, 1, 15, 12, 30, 45, tzinfo=timezone.utc)
+        utc_time = datetime(2025, 1, 15, 12, 30, 45, tzinfo=UTC)
         result = format_time_local(utc_time, include_seconds=True)
 
         # Should contain seconds (either HH:MM:SS or H:MM:SS AM/PM format)
@@ -31,7 +29,7 @@ class TestFormatTimeLocal:
 
     def test_no_seconds_by_default(self) -> None:
         """Test that seconds are not included by default."""
-        utc_time = datetime(2025, 1, 15, 12, 30, 45, tzinfo=timezone.utc)
+        utc_time = datetime(2025, 1, 15, 12, 30, 45, tzinfo=UTC)
         result = format_time_local(utc_time)
 
         # Should not contain seconds
@@ -53,8 +51,8 @@ class TestFormatTimeLocal:
 
     def test_output_format_is_consistent(self) -> None:
         """Test that output format is consistent for same locale."""
-        utc_time1 = datetime(2025, 1, 15, 10, 0, 0, tzinfo=timezone.utc)
-        utc_time2 = datetime(2025, 1, 15, 22, 0, 0, tzinfo=timezone.utc)
+        utc_time1 = datetime(2025, 1, 15, 10, 0, 0, tzinfo=UTC)
+        utc_time2 = datetime(2025, 1, 15, 22, 0, 0, tzinfo=UTC)
 
         result1 = format_time_local(utc_time1)
         result2 = format_time_local(utc_time2)

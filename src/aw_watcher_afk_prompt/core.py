@@ -16,7 +16,7 @@ import aw_transform
 from aw_client.client import ActivityWatchClient
 from requests.exceptions import HTTPError
 
-from aw_watcher_afk_prompt.utils import LOCAL_TIMEZONE, format_time_local
+from aw_watcher_afk_prompt.utils import LOCAL_TIMEZONE
 
 # Import ActivityLine for split mode support
 try:
@@ -493,8 +493,8 @@ class AWAfkPromptState:
         non_afk_events = squash_overlaps([e for e in events if not is_afk(e)])
         logger.debug(f"Non-AFK events after squash: {len(non_afk_events)}")
         for evt in non_afk_events[-3:]:  # Last 3 events
-            start = evt.timestamp.astimezone(LOCAL_TIMEZONE).strftime('%H:%M:%S')
-            end = (evt.timestamp + evt.duration).astimezone(LOCAL_TIMEZONE).strftime('%H:%M:%S')
+            start = evt.timestamp.astimezone(LOCAL_TIMEZONE).strftime("%H:%M:%S")
+            end = (evt.timestamp + evt.duration).astimezone(LOCAL_TIMEZONE).strftime("%H:%M:%S")
             logger.debug(f"  Event: {start} - {end} ({evt.duration.total_seconds():.1f}s)")
         pseudo_afk_events = list(get_gaps(non_afk_events))
         logger.debug(f"Gaps found: {len(pseudo_afk_events)}")

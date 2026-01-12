@@ -9,7 +9,6 @@ import tkinter as tk
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from tkinter import simpledialog, ttk
-from typing import Optional
 
 from aw_watcher_afk_prompt.utils import format_time_local
 from aw_watcher_afk_prompt.widgets import EnhancedEntry
@@ -171,7 +170,7 @@ class TimeCalculator:
         start: datetime,
         duration_seconds: float,
         num_activities: int,
-        descriptions: Optional[list[str]] = None
+        descriptions: list[str] | None = None
     ) -> list[ActivityLine]:
         """Split an AFK period into equal-duration activities.
 
@@ -225,7 +224,7 @@ class TimeCalculator:
         activities: list[ActivityLine],
         index: int,
         new_duration_minutes: int,
-        original_end: Optional[datetime] = None
+        original_end: datetime | None = None
     ) -> list[ActivityLine]:
         """Adjust the duration of an activity and update subsequent activities.
 
@@ -322,7 +321,7 @@ class TimeCalculator:
         activities: list[ActivityLine],
         index: int,
         new_start: datetime,
-        original_end: Optional[datetime] = None
+        original_end: datetime | None = None
     ) -> list[ActivityLine]:
         """Adjust the start time of an activity and update related activities.
 
@@ -418,8 +417,8 @@ class TimeCalculator:
         activities: list[ActivityLine],
         original_end: datetime,
         equal_distribution: bool = False,
-        original_start: Optional[datetime] = None,
-        original_duration_seconds: Optional[float] = None
+        original_start: datetime | None = None,
+        original_duration_seconds: float | None = None
     ) -> list[ActivityLine]:
         """Add a new activity line.
 
@@ -607,7 +606,7 @@ class ActivityLineWidget:
         if not is_first:
             self.start_var.trace_add("write", lambda *args: self._on_start_change())
         self.start_entry = ttk.Entry(parent, textvariable=self.start_var, width=10,
-                               state='readonly' if is_first else 'normal',
+                               state="readonly" if is_first else "normal",
                                takefocus=0 if is_first else 1)
         self.start_entry.grid(row=row, column=1, padx=5, pady=2)
 
@@ -628,14 +627,14 @@ class ActivityLineWidget:
         desc = self.desc_var.get()
         logger.debug(f"Activity {self.index} description changed to: '{desc}'")
         # Notify parent about description change
-        self.on_change(field='description', value=desc)
+        self.on_change(field="description", value=desc)
 
     def _on_start_change(self):
         """Handle start time change."""
         start = self.start_var.get()
         logger.debug(f"Activity {self.index} start time changed to: '{start}'")
         # Notify parent about start time change
-        self.on_change(field='start_time', value=start)
+        self.on_change(field="start_time", value=start)
 
     def _on_duration_change(self):
         """Handle duration change."""
@@ -643,7 +642,7 @@ class ActivityLineWidget:
             duration = self.duration_var.get()
             logger.debug(f"Activity {self.index} duration changed to: {duration}")
             # Notify parent about duration change
-            self.on_change(field='duration', value=duration)
+            self.on_change(field="duration", value=duration)
         except tk.TclError as e:
             logger.warning(f"Invalid duration value for activity {self.index}: {e}")
 
@@ -698,14 +697,14 @@ class ActivityLineWidget:
 
 class SplitActivityDialog(simpledialog.Dialog):
     """Dialog for splitting an AFK period into multiple activities.
-    
+
     Allows users to:
     - Split a single AFK period into multiple sequential activities
     - Add/remove activity lines
     - Edit descriptions, start times, and durations
     - Automatic time consistency enforcement
     """
-    
+
     def __init__(self, parent, title: str, prompt: str,
                  afk_start: datetime, afk_duration_seconds: float,
                  history: list[str]):
@@ -737,7 +736,7 @@ class SplitActivityDialog(simpledialog.Dialog):
         self.single_mode_description = ""  # Description to use when returning to single mode
 
         super().__init__(parent, title)
-    
+
     def body(self, master):
         """Create the dialog body with activity line widgets."""
         self.master_frame = ttk.Frame(master)
@@ -748,11 +747,11 @@ class SplitActivityDialog(simpledialog.Dialog):
         prompt_label.grid(row=0, column=0, columnspan=5, padx=5, pady=5, sticky=tk.W)
 
         # Header row
-        ttk.Label(self.master_frame, text="Description", font=('TkDefaultFont', 9, 'bold')).grid(
+        ttk.Label(self.master_frame, text="Description", font=("TkDefaultFont", 9, "bold")).grid(
             row=1, column=0, padx=5, pady=2, sticky=tk.W)
-        ttk.Label(self.master_frame, text="Start", font=('TkDefaultFont', 9, 'bold')).grid(
+        ttk.Label(self.master_frame, text="Start", font=("TkDefaultFont", 9, "bold")).grid(
             row=1, column=1, padx=5, pady=2, sticky=tk.W)
-        ttk.Label(self.master_frame, text="Mins", font=('TkDefaultFont', 9, 'bold')).grid(
+        ttk.Label(self.master_frame, text="Mins", font=("TkDefaultFont", 9, "bold")).grid(
             row=1, column=2, padx=5, pady=2, sticky=tk.W)
 
         # Activities will be drawn starting at row 2
@@ -768,7 +767,7 @@ class SplitActivityDialog(simpledialog.Dialog):
         if self.activity_widgets:
             return self.activity_widgets[0].desc_entry
         return None
-    
+
     def redraw_activities(self):
         """Redraw all activity line widgets."""
         # Clear existing widgets
@@ -777,7 +776,7 @@ class SplitActivityDialog(simpledialog.Dialog):
         self.activity_widgets = []
 
         # Destroy add button if it exists
-        if hasattr(self, 'add_btn'):
+        if hasattr(self, "add_btn"):
             self.add_btn.destroy()
 
         # Create new widgets for each activity
@@ -798,7 +797,7 @@ class SplitActivityDialog(simpledialog.Dialog):
         add_row = self.first_activity_row + len(self.activities)
         self.add_btn = ttk.Button(self.master_frame, text="+", command=self.add_activity_line)
         self.add_btn.grid(row=add_row, column=0, padx=5, pady=5, sticky=tk.W)
-    
+
     def on_activity_changed(self, changed_index: int, field: str, value):
         """Handle changes to any activity field.
 
@@ -811,7 +810,7 @@ class SplitActivityDialog(simpledialog.Dialog):
         self.equal_distribution_mode = False
 
         try:
-            if field == 'description':
+            if field == "description":
                 # Just update the description in the activity
                 activity = self.activities[changed_index]
                 self.activities[changed_index] = ActivityLine(
@@ -822,7 +821,7 @@ class SplitActivityDialog(simpledialog.Dialog):
                 )
                 logger.info(f"Activity {changed_index} description updated to: '{value}'")
 
-            elif field == 'duration':
+            elif field == "duration":
                 # Use TimeCalculator to adjust the duration
                 logger.info(f"Activity {changed_index} duration changed to {value} minutes")
                 self.activities = TimeCalculator.adjust_duration(
@@ -844,16 +843,16 @@ class SplitActivityDialog(simpledialog.Dialog):
                 for i, (widget, activity) in enumerate(zip(self.activity_widgets, self.activities)):
                     widget.update_from_activity(activity, i == 0)
 
-            elif field == 'start_time':
+            elif field == "start_time":
                 # Parse start time string (HH:MM format) and adjust
                 if changed_index == 0:
                     # First activity start time is not editable
-                    logger.warning(f"Cannot edit start time of first activity")
+                    logger.warning("Cannot edit start time of first activity")
                     return
 
                 try:
                     # Parse HH:MM format
-                    parts = value.split(':')
+                    parts = value.split(":")
                     if len(parts) != 2:
                         logger.warning(f"Invalid start time format: {value}")
                         return
@@ -897,7 +896,7 @@ class SplitActivityDialog(simpledialog.Dialog):
         except (ValueError, tk.TclError) as e:
             logger.warning(f"Error updating activity {changed_index}: {e}")
             pass
-    
+
     def add_activity_line(self):
         """Add a new activity line."""
         try:
@@ -912,7 +911,7 @@ class SplitActivityDialog(simpledialog.Dialog):
         except ValueError as e:
             # Show error message
             tk.messagebox.showerror("Cannot Add Activity", str(e))
-    
+
     def remove_activity_line(self, index: int):
         """Remove an activity line."""
         self.activities = TimeCalculator.remove_activity(self.activities, index)
@@ -930,26 +929,26 @@ class SplitActivityDialog(simpledialog.Dialog):
             return
 
         self.redraw_activities()
-    
+
     def buttonbox(self):
         """Create OK and Cancel buttons."""
         box = ttk.Frame(self)
-        
+
         ok_btn = ttk.Button(box, text="OK", width=10, command=self.ok, default=tk.ACTIVE)
         ok_btn.pack(side=tk.LEFT, padx=5, pady=5)
-        
+
         cancel_btn = ttk.Button(box, text="Cancel", width=10, command=self.cancel)
         cancel_btn.pack(side=tk.LEFT, padx=5, pady=5)
-        
+
         self.bind("<Return>", self.ok)
         self.bind("<Escape>", self.cancel)
-        
+
         # Keyboard shortcuts for add/remove
         self.bind("<Control-plus>", lambda e: self.add_activity_line())
         self.bind("<Control-equal>", lambda e: self.add_activity_line())  # + without shift
-        
+
         box.pack()
-    
+
     def validate(self) -> bool:
         """Validate the split activity data before accepting."""
         # Create SplitActivityData and validate
@@ -971,7 +970,7 @@ class SplitActivityDialog(simpledialog.Dialog):
             return False
 
         return True
-    
+
     def apply(self):
         """Called when OK is clicked and validation passes."""
         self.result = self.activities
@@ -979,7 +978,7 @@ class SplitActivityDialog(simpledialog.Dialog):
 
 def ask_split_activities(title: str, prompt: str, afk_start: datetime,
                          afk_duration_seconds: float, history: list[str],
-                         parent=None) -> Optional[list[ActivityLine]] | str:
+                         parent=None) -> list[ActivityLine] | None | str:
     """Show split activity dialog and return list of activities, description, or None.
 
     Args:
