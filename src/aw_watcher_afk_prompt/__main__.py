@@ -7,7 +7,7 @@ from tkinter import messagebox
 import aw_core
 from aw_client.client import ActivityWatchClient
 from aw_core.log import setup_logging
-from requests.exceptions import ConnectionError
+from requests.exceptions import ConnectionError, HTTPError
 
 import aw_watcher_afk_prompt.dialog as aw_dialog
 from aw_watcher_afk_prompt.config import load_config
@@ -268,9 +268,13 @@ def main() -> None:
             # Backfill mode: on startup, prompt for old unfilled AFK periods
             if args.backfill:
                 logger.info(f"Backfill mode enabled, looking back {args.backfill_depth} minutes")
-                backfill_events = list(state.get_new_afk_events_to_note(
-                    seconds=args.backfill_depth * 60, durration_thresh=args.length * 60
-                ) or [])
+                try:
+                    backfill_events = list(state.get_new_afk_events_to_note(
+                        seconds=args.backfill_depth * 60, durration_thresh=args.length * 60
+                    ) or [])
+                except (ConnectionError, HTTPError) as e:
+                    logger.warning(f"Backfill failed due to server error: {e}")
+                    backfill_events = []
                 # Sort oldest first for chronological backfill
                 backfill_events.sort(key=lambda e: e.timestamp)
                 if backfill_events:
@@ -291,23 +295,51 @@ def main() -> None:
                     logger.info("No unfilled AFK periods found for backfill")
 
             # Normal operation loop
+            server_down_since = None
+            server_down_notified = False
             while True:
-                for event in state.get_new_afk_events_to_note(
-                    seconds=args.depth * 60, durration_thresh=args.length * 60
-                ):
-                    response = prompt(event, state.state.recent_events)
-                    if response is None:
-                        # User cancelled
-                        continue
-                    elif isinstance(response, tuple) and response[0] == "SPLIT_MODE":
-                        # User used split mode
-                        activities = response[1]
-                        logger.info(f"Posting {len(activities)} split activities")
-                        state.post_split_events(event, activities)
+                try:
+                    for event in state.get_new_afk_events_to_note(
+                        seconds=args.depth * 60, durration_thresh=args.length * 60
+                    ):
+                        response = prompt(event, state.state.recent_events)
+                        if response is None:
+                            # User cancelled
+                            continue
+                        elif isinstance(response, tuple) and response[0] == "SPLIT_MODE":
+                            # User used split mode
+                            activities = response[1]
+                            logger.info(f"Posting {len(activities)} split activities")
+                            state.post_split_events(event, activities)
+                        else:
+                            # Normal single-entry mode
+                            logger.info(response)
+                            state.post_event(event, response)
+                    # Poll succeeded — reset server down tracking
+                    if server_down_since is not None:
+                        logger.info("Server connection restored.")
+                    server_down_since = None
+                    server_down_notified = False
+                except (ConnectionError, HTTPError) as e:
+                    if server_down_since is None:
+                        server_down_since = time.monotonic()
+                        logger.warning(f"Server connection error: {e}")
                     else:
-                        # Normal single-entry mode
-                        logger.info(response)
-                        state.post_event(event, response)
+                        logger.debug(f"Server still unreachable: {e}")
+                    down_duration = time.monotonic() - server_down_since
+                    if down_duration >= 300 and not server_down_notified:
+                        server_down_notified = True
+                        logger.error(
+                            f"Server has been unreachable for "
+                            f"{int(down_duration // 60)} minutes"
+                        )
+                        messagebox.showwarning(
+                            "AW Watcher AFK Prompt: Server Unreachable",
+                            "The ActivityWatch server has been unreachable for over "
+                            "5 minutes.\n\n"
+                            "AFK periods during this time will not be tracked.\n\n"
+                            "Please check if aw-server is running.",
+                        )
                 time.sleep(args.frequency)
     except Exception as e:
         messagebox.showerror("AW Watcher Ask Away: Error", f"An unhandled exception occurred: {e}")

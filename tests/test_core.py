@@ -26,7 +26,7 @@ def _tuple_to_event(tup: TupleEvent) -> aw_core.Event:
 
 
 def _event_to_tuple(event: aw_core.Event) -> tuple[int, int]:
-    return (int(event.timestamp.timestamp()), event.duration.seconds)
+    return (int(event.timestamp.timestamp()), int(event.duration.total_seconds()))
 
 
 def test_get_unseen_afk_events_initial():
@@ -113,3 +113,45 @@ def test_double_ask_suspend_afk():
     expected_end = datetime.datetime.fromisoformat("2023-10-13T08:47:38.792000-04:00")
     assert second_unseen[0].timestamp == expected_start
     assert second_unseen[0].duration.total_seconds() == (expected_end - expected_start).total_seconds()
+
+
+def test_long_afk_over_24_hours():
+    """Test that AFK periods >= 24 hours are detected correctly.
+
+    Regression test: previously used timedelta.seconds (which drops the days component)
+    instead of timedelta.total_seconds(), causing AFK periods >= 24h to be missed.
+    """
+    now = datetime.datetime.now().astimezone(datetime.UTC)
+    day_ago = now - datetime.timedelta(hours=25)
+    events: list[TupleEvent] = [
+        (day_ago, 60, NOT_AFK),
+        # 25-hour gap here
+        (now, 10, NOT_AFK),
+    ]
+    events = [_tuple_to_event(tup) for tup in events]
+
+    state = AWAfkPromptState([])
+    # duration threshold is 5 minutes (300s); the 25-hour gap should easily pass
+    unseen = list(state.get_unseen_afk_events(events, INF, 300))
+    assert len(unseen) == 1
+    # The gap duration should be ~25 hours (minus the 60s first event)
+    assert unseen[0].duration.total_seconds() > 24 * 3600
+
+
+def test_afk_exactly_at_threshold():
+    """Test that AFK periods exactly at the duration threshold are NOT detected (strict >).
+
+    The threshold uses strict greater-than, so a gap of exactly 300s with
+    durration_thresh=300 should not be detected.
+    """
+    events: list[TupleEvent] = [
+        (0, 60, NOT_AFK),
+        (360, 60, NOT_AFK),  # gap of exactly 300s (60 to 360)
+    ]
+    events = [_tuple_to_event(tup) for tup in events]
+
+    state = AWAfkPromptState([])
+    # Exactly at threshold — should NOT be detected
+    assert list(state.get_unseen_afk_events(events, INF, 300)) == []
+    # One second less threshold — should be detected
+    assert len(list(state.get_unseen_afk_events(events, INF, 299))) == 1

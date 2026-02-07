@@ -336,11 +336,12 @@ class AWAfkPromptClient:
             if not all_events:
                 return all_events, limit
 
-            # Check if we have at least one non-afk event (to mark boundaries)
-            has_non_afk = any(not is_afk(e) for e in all_events)
+            # Gap detection via get_gaps/pairwise needs at least 2 non-afk events
+            # (one on each side of a gap) to detect any gap at all
+            non_afk_count = sum(1 for e in all_events if not is_afk(e))
 
-            if has_non_afk:
-                # We have boundaries, good to go
+            if non_afk_count >= 2:
+                # We have enough boundaries for gap detection
                 if limit > initial_limit:
                     logger.debug(f"Dynamic limit scaling: needed {limit} events to find gap boundaries")
                 return all_events, limit
@@ -376,29 +377,27 @@ class AWAfkPromptClient:
         durration_thresh : float
             The number of seconds you need to be away before reporting on it.
         """
-        try:
-            # Fetch events with dynamic limit scaling
-            all_events, limit_used = self._fetch_events_with_dynamic_limit(
-                initial_limit=10,
-                max_limit=self.history_limit
-            )
+        # Fetch events with dynamic limit scaling
+        # Connection errors (HTTPError, ConnectionError) are intentionally NOT caught here
+        # so the caller can track server downtime and notify the user.
+        all_events, limit_used = self._fetch_events_with_dynamic_limit(
+            initial_limit=10,
+            max_limit=self.history_limit
+        )
 
-            # Check if currently AFK (from either source)
-            # Most recent event is LAST after sorting (ascending order)
-            if all_events:
-                most_recent = all_events[-1]  # Last element is most recent
-                currently_afk = is_afk(most_recent)
-                logger.debug(f"Most recent event: {most_recent.timestamp.astimezone(LOCAL_TIMEZONE).strftime('%H:%M:%S')} | "
-                           f"status={most_recent.data.get('status')} | currently_afk={currently_afk}")
-                if currently_afk:
-                    # Currently AFK, wait to bring up the prompt
-                    logger.debug("Currently AFK, waiting for user to return")
-                    return
+        # Check if currently AFK (from either source)
+        # Most recent event is LAST after sorting (ascending order)
+        if all_events:
+            most_recent = all_events[-1]  # Last element is most recent
+            currently_afk = is_afk(most_recent)
+            logger.debug(f"Most recent event: {most_recent.timestamp.astimezone(LOCAL_TIMEZONE).strftime('%H:%M:%S')} | "
+                       f"status={most_recent.data.get('status')} | currently_afk={currently_afk}")
+            if currently_afk:
+                # Currently AFK, wait to bring up the prompt
+                logger.debug("Currently AFK, waiting for user to return")
+                return
 
-            yield from self.state.get_unseen_afk_events(all_events, seconds, durration_thresh)
-        except HTTPError:
-            logger.exception("Failed to get events from the server.")
-            return
+        yield from self.state.get_unseen_afk_events(all_events, seconds, durration_thresh)
 
 
 class AWAfkPromptState:
@@ -505,10 +504,10 @@ class AWAfkPromptState:
         logger.debug(f"Gaps after filtering seen: {len(pseudo_afk_events)}")
         buffered_now = get_utc_now() - datetime.timedelta(seconds=recency_thresh)
         for event in pseudo_afk_events:
-            long_enough = event.duration.seconds > durration_thresh
+            long_enough = event.duration.total_seconds() > durration_thresh
             recent_enough = event.timestamp + event.duration > buffered_now
             logger.debug(f"  Checking gap at {event.timestamp.astimezone(LOCAL_TIMEZONE).strftime('%H:%M:%S')}: "
-                       f"long_enough={long_enough} ({event.duration.seconds}s > {durration_thresh}s), "
+                       f"long_enough={long_enough} ({event.duration.total_seconds():.1f}s > {durration_thresh}s), "
                        f"recent_enough={recent_enough}")
             if long_enough and recent_enough:
                 logger.debug(f"Found event to note: {event}")
