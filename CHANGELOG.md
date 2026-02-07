@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-02-07
+
+### Fixed
+
+- Use `total_seconds()` instead of `timedelta.seconds` for AFK duration check — `.seconds` drops the days component, causing AFK periods >= 24 hours to be missed
+- Dynamic limit scaling now requires at least 2 non-afk events (was 1), since `pairwise` gap detection needs events on both sides of a gap
+- `ConnectionError` from server downtime no longer crashes the watcher — the main loop now retries and shows a warning dialog after 5 minutes of continuous unreachability
+
+## [0.1.4] - 2026-01-12
+
+### Fixed
+
+- Remove auto-generated `_version.py` from git tracking
+- Improve tag fetching for version detection in CI
+
+## [0.1.1] - 2026-01-12
+
+### Added
+
+- GitHub Actions for CI and PyPI publishing
+
+### Fixed
+
+- Exclude old ask-away bucket and add error logging
+- Resolve linting issues
+- Add virtual display for tkinter tests in CI
+
 ## [0.1.0] - 2026-01-11
 
 First release under the new name `aw-watcher-afk-prompt`. This release includes
@@ -39,5 +66,8 @@ all improvements made in the tobixen fork of the original `aw-watcher-ask-away`.
 - Use local timezone and locale-aware time format in dialogs
 - IndexError when history is empty
 
-[Unreleased]: https://github.com/tobixen/aw-watcher-afk-prompt/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/tobixen/aw-watcher-afk-prompt/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/tobixen/aw-watcher-afk-prompt/compare/v0.1.4...v0.1.5
+[0.1.4]: https://github.com/tobixen/aw-watcher-afk-prompt/compare/v0.1.1...v0.1.4
+[0.1.1]: https://github.com/tobixen/aw-watcher-afk-prompt/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/tobixen/aw-watcher-afk-prompt/releases/tag/v0.1.0
