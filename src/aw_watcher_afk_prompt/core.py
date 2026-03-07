@@ -41,7 +41,8 @@ logger = logging.getLogger(__name__)
 def find_afk_bucket(buckets: dict[str, Any]) -> str:
     # Find aw-watcher-afk bucket, excluding our own bucket and lid bucket
     afk_buckets = [
-        bucket for bucket in buckets
+        bucket
+        for bucket in buckets
         if "aw-watcher-afk" in bucket
         and "lid" not in bucket
         and "afk-prompt" not in bucket  # Exclude our own bucket
@@ -187,8 +188,7 @@ class SeenEventsStore:
 
 
 class AWAfkPromptClient:
-    def __init__(self, client: ActivityWatchClient, enable_lid_events: bool = True,
-                 history_limit: int = 100):
+    def __init__(self, client: ActivityWatchClient, enable_lid_events: bool = True, history_limit: int = 100):
         self.client = client
         self.bucket_id = f"{WATCHER_NAME}_{self.client.client_hostname}"
         self.enable_lid_events = enable_lid_events
@@ -204,9 +204,7 @@ class AWAfkPromptClient:
 
         # Load recent events for history display (still using deque for in-memory)
         recent_events = deque(maxlen=100)
-        recent_events.extend(aw_transform.sort_by_timestamp(
-            client.get_events(self.bucket_id, limit=100)
-        ))
+        recent_events.extend(aw_transform.sort_by_timestamp(client.get_events(self.bucket_id, limit=100)))
         self.state = AWAfkPromptState(recent_events, self.seen_store)
 
         self.afk_bucket_id = find_afk_bucket(self._all_buckets)
@@ -272,27 +270,26 @@ class AWAfkPromptClient:
                 # Create a new event for this activity with split metadata
                 event = aw_core.Event(
                     timestamp=activity.start_time,
-                    duration=datetime.timedelta(
-                        minutes=activity.duration_minutes,
-                        seconds=activity.duration_seconds
-                    ),
+                    duration=datetime.timedelta(minutes=activity.duration_minutes, seconds=activity.duration_seconds),
                     data={
                         DATA_KEY: activity.description,
                         "split": True,
                         "split_count": len(activities),
                         "split_index": i,
                         "split_id": split_id,
-                    }
+                    },
                 )
 
                 # Post to ActivityWatch
                 self.client.insert_event(self.bucket_id, event)
-                logger.info(f"Posted activity {i+1}/{len(activities)}: '{activity.description}' "
-                          f"({activity.duration_minutes}m {activity.duration_seconds}s)")
+                logger.info(
+                    f"Posted activity {i + 1}/{len(activities)}: '{activity.description}' "
+                    f"({activity.duration_minutes}m {activity.duration_seconds}s)"
+                )
                 posted_count += 1
 
             except Exception as e:
-                logger.error(f"Failed to post activity {i+1}/{len(activities)}: {e}")
+                logger.error(f"Failed to post activity {i + 1}/{len(activities)}: {e}")
                 failed_count += 1
                 # Continue trying to post remaining activities
 
@@ -301,8 +298,10 @@ class AWAfkPromptClient:
             self.state.mark_event_as_seen(original_event)
             logger.info(f"Successfully posted all {posted_count} split activities")
         else:
-            logger.warning(f"Posted {posted_count}/{len(activities)} activities, "
-                         f"{failed_count} failed. Event will be prompted again.")
+            logger.warning(
+                f"Posted {posted_count}/{len(activities)} activities, "
+                f"{failed_count} failed. Event will be prompted again."
+            )
             # Don't mark as seen - user will be prompted again
 
     def _fetch_events_with_dynamic_limit(self, initial_limit: int = 10, max_limit: int = 1000):
@@ -380,18 +379,17 @@ class AWAfkPromptClient:
         # Fetch events with dynamic limit scaling
         # Connection errors (HTTPError, ConnectionError) are intentionally NOT caught here
         # so the caller can track server downtime and notify the user.
-        all_events, limit_used = self._fetch_events_with_dynamic_limit(
-            initial_limit=10,
-            max_limit=self.history_limit
-        )
+        all_events, limit_used = self._fetch_events_with_dynamic_limit(initial_limit=10, max_limit=self.history_limit)
 
         # Check if currently AFK (from either source)
         # Most recent event is LAST after sorting (ascending order)
         if all_events:
             most_recent = all_events[-1]  # Last element is most recent
             currently_afk = is_afk(most_recent)
-            logger.debug(f"Most recent event: {most_recent.timestamp.astimezone(LOCAL_TIMEZONE).strftime('%H:%M:%S')} | "
-                       f"status={most_recent.data.get('status')} | currently_afk={currently_afk}")
+            logger.debug(
+                f"Most recent event: {most_recent.timestamp.astimezone(LOCAL_TIMEZONE).strftime('%H:%M:%S')} | "
+                f"status={most_recent.data.get('status')} | currently_afk={currently_afk}"
+            )
             if currently_afk:
                 # Currently AFK, wait to bring up the prompt
                 logger.debug("Currently AFK, waiting for user to return")
@@ -401,8 +399,7 @@ class AWAfkPromptClient:
 
 
 class AWAfkPromptState:
-    def __init__(self, recent_events: Iterable[aw_core.Event],
-                 seen_store: SeenEventsStore | None = None):
+    def __init__(self, recent_events: Iterable[aw_core.Event], seen_store: SeenEventsStore | None = None):
         self.recent_events = recent_events if isinstance(recent_events, deque) else deque(recent_events, 100)
         """The recent events we have posted to the aw-watcher-afk-prompt bucket.
 
@@ -464,7 +461,9 @@ class AWAfkPromptState:
         else:
             logger.debug(f"Event already marked as seen: {event}")
 
-    def get_unseen_afk_events(self, events: list[aw_core.Event], recency_thresh: float, durration_thresh: float) -> Iterator[aw_core.Event]:
+    def get_unseen_afk_events(
+        self, events: list[aw_core.Event], recency_thresh: float, durration_thresh: float
+    ) -> Iterator[aw_core.Event]:
         """Check whether we recently finished a large AFK event.
 
         Parameters
@@ -498,7 +497,9 @@ class AWAfkPromptState:
         pseudo_afk_events = list(get_gaps(non_afk_events))
         logger.debug(f"Gaps found: {len(pseudo_afk_events)}")
         for gap in pseudo_afk_events:
-            logger.debug(f"  Gap: {gap.timestamp.astimezone(LOCAL_TIMEZONE).strftime('%H:%M:%S')} | {gap.duration.total_seconds():.1f}s")
+            logger.debug(
+                f"  Gap: {gap.timestamp.astimezone(LOCAL_TIMEZONE).strftime('%H:%M:%S')} | {gap.duration.total_seconds():.1f}s"
+            )
 
         pseudo_afk_events = [e for e in pseudo_afk_events if not self.has_event(e)]
         logger.debug(f"Gaps after filtering seen: {len(pseudo_afk_events)}")
@@ -506,9 +507,11 @@ class AWAfkPromptState:
         for event in pseudo_afk_events:
             long_enough = event.duration.total_seconds() > durration_thresh
             recent_enough = event.timestamp + event.duration > buffered_now
-            logger.debug(f"  Checking gap at {event.timestamp.astimezone(LOCAL_TIMEZONE).strftime('%H:%M:%S')}: "
-                       f"long_enough={long_enough} ({event.duration.total_seconds():.1f}s > {durration_thresh}s), "
-                       f"recent_enough={recent_enough}")
+            logger.debug(
+                f"  Checking gap at {event.timestamp.astimezone(LOCAL_TIMEZONE).strftime('%H:%M:%S')}: "
+                f"long_enough={long_enough} ({event.duration.total_seconds():.1f}s > {durration_thresh}s), "
+                f"recent_enough={recent_enough}"
+            )
             if long_enough and recent_enough:
                 logger.debug(f"Found event to note: {event}")
                 yield event

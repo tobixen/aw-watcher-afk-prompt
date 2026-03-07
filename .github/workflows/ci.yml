@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ['3.11', '3.12', '3.13']
+        python-version: ['3.11', '3.12', '3.13', '3.14']
     steps:
       - uses: actions/checkout@v4
         with:
@@ -28,9 +28,7 @@ jobs:
           sudo apt-get install -y xvfb python3-tk
 
       - name: Install dependencies
-        run: |
-          pip install -e ".[dev]" || pip install -e .
-          pip install pytest
+        run: pip install -e ".[dev]"
 
       - name: Run tests
         run: xvfb-run pytest tests/ -v
@@ -48,5 +46,8 @@ jobs:
       - name: Install linting tools
         run: pip install ruff
 
-      - name: Run ruff
+      - name: Run ruff check
         run: ruff check .
+
+      - name: Run ruff format check
+        run: ruff format --check .

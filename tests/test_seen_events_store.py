@@ -22,9 +22,7 @@ def temp_config_dir(tmp_path):
 def make_event(timestamp: datetime.datetime, duration_seconds: float) -> aw_core.Event:
     """Create a test event."""
     return aw_core.Event(
-        timestamp=timestamp,
-        duration=datetime.timedelta(seconds=duration_seconds),
-        data={"status": "afk"}
+        timestamp=timestamp, duration=datetime.timedelta(seconds=duration_seconds), data={"status": "afk"}
     )
 
 
@@ -96,12 +94,7 @@ class TestSeenEventsStore:
 
         # Manually write to the store file
         store_file = temp_config_dir / "seen_events.json"
-        store_file.write_text(json.dumps({
-            old_time.isoformat(): {
-                "timestamp": old_time.isoformat(),
-                "duration": 300
-            }
-        }))
+        store_file.write_text(json.dumps({old_time.isoformat(): {"timestamp": old_time.isoformat(), "duration": 300}}))
 
         # Create store with 7 day max age - old event should be cleaned up
         store = SeenEventsStore(max_age_days=7)
@@ -115,12 +108,9 @@ class TestSeenEventsStore:
 
         # Manually write to the store file
         store_file = temp_config_dir / "seen_events.json"
-        store_file.write_text(json.dumps({
-            recent_time.isoformat(): {
-                "timestamp": recent_time.isoformat(),
-                "duration": 300
-            }
-        }))
+        store_file.write_text(
+            json.dumps({recent_time.isoformat(): {"timestamp": recent_time.isoformat(), "duration": 300}})
+        )
 
         # Create store with 7 day max age - recent event should be preserved
         store = SeenEventsStore(max_age_days=7)

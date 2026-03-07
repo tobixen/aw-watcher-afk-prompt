@@ -17,12 +17,7 @@ class TestActivityLine:
     def test_activity_line_creation(self) -> None:
         """Test creating an ActivityLine."""
         start = datetime(2025, 1, 15, 14, 30, 0, tzinfo=UTC)
-        activity = ActivityLine(
-            description="lunch",
-            start_time=start,
-            duration_minutes=20,
-            duration_seconds=30
-        )
+        activity = ActivityLine(description="lunch", start_time=start, duration_minutes=20, duration_seconds=30)
 
         assert activity.description == "lunch"
         assert activity.start_time == start
@@ -32,12 +27,7 @@ class TestActivityLine:
     def test_end_time_calculation(self) -> None:
         """Test end_time property calculates correctly."""
         start = datetime(2025, 1, 15, 14, 30, 0, tzinfo=UTC)
-        activity = ActivityLine(
-            description="meeting",
-            start_time=start,
-            duration_minutes=45,
-            duration_seconds=15
-        )
+        activity = ActivityLine(description="meeting", start_time=start, duration_minutes=45, duration_seconds=15)
 
         expected_end = start + timedelta(minutes=45, seconds=15)
         assert activity.end_time == expected_end
@@ -48,7 +38,7 @@ class TestActivityLine:
             description="test",
             start_time=datetime(2025, 1, 15, 10, 0, 0, tzinfo=UTC),
             duration_minutes=5,
-            duration_seconds=30
+            duration_seconds=30,
         )
 
         assert activity.total_duration_seconds == 5 * 60 + 30
@@ -60,7 +50,7 @@ class TestActivityLine:
                 description="test",
                 start_time=datetime(2025, 1, 15, 10, 0, 0, tzinfo=UTC),
                 duration_minutes=-5,
-                duration_seconds=0
+                duration_seconds=0,
             )
 
     def test_invalid_duration_seconds_rejected(self) -> None:
@@ -70,7 +60,7 @@ class TestActivityLine:
                 description="test",
                 start_time=datetime(2025, 1, 15, 10, 0, 0, tzinfo=UTC),
                 duration_minutes=5,
-                duration_seconds=65
+                duration_seconds=65,
             )
 
 
@@ -80,16 +70,9 @@ class TestSplitActivityData:
     def test_valid_split_data(self) -> None:
         """Test validation passes for valid data."""
         start = datetime(2025, 1, 15, 14, 0, 0, tzinfo=UTC)
-        activities = [
-            ActivityLine("lunch", start, 20, 0),
-            ActivityLine("phone", start + timedelta(minutes=20), 10, 0)
-        ]
+        activities = [ActivityLine("lunch", start, 20, 0), ActivityLine("phone", start + timedelta(minutes=20), 10, 0)]
 
-        data = SplitActivityData(
-            original_start=start,
-            original_duration_seconds=30 * 60,
-            activities=activities
-        )
+        data = SplitActivityData(original_start=start, original_duration_seconds=30 * 60, activities=activities)
 
         assert data.is_valid()
         assert len(data.validate()) == 0
@@ -98,15 +81,9 @@ class TestSplitActivityData:
         """Test validation fails if first activity doesn't start at AFK period start."""
         start = datetime(2025, 1, 15, 14, 0, 0, tzinfo=UTC)
         wrong_start = start + timedelta(minutes=5)
-        activities = [
-            ActivityLine("test", wrong_start, 30, 0)
-        ]
+        activities = [ActivityLine("test", wrong_start, 30, 0)]
 
-        data = SplitActivityData(
-            original_start=start,
-            original_duration_seconds=30 * 60,
-            activities=activities
-        )
+        data = SplitActivityData(original_start=start, original_duration_seconds=30 * 60, activities=activities)
 
         assert not data.is_valid()
         errors = data.validate()
@@ -118,14 +95,10 @@ class TestSplitActivityData:
         activities = [
             ActivityLine("lunch", start, 20, 0),
             # Gap of 5 minutes
-            ActivityLine("phone", start + timedelta(minutes=25), 5, 0)
+            ActivityLine("phone", start + timedelta(minutes=25), 5, 0),
         ]
 
-        data = SplitActivityData(
-            original_start=start,
-            original_duration_seconds=30 * 60,
-            activities=activities
-        )
+        data = SplitActivityData(original_start=start, original_duration_seconds=30 * 60, activities=activities)
 
         assert not data.is_valid()
         errors = data.validate()
@@ -137,14 +110,10 @@ class TestSplitActivityData:
         activities = [
             ActivityLine("lunch", start, 20, 0),
             # Overlap: starts 5 minutes early
-            ActivityLine("phone", start + timedelta(minutes=15), 10, 0)
+            ActivityLine("phone", start + timedelta(minutes=15), 10, 0),
         ]
 
-        data = SplitActivityData(
-            original_start=start,
-            original_duration_seconds=30 * 60,
-            activities=activities
-        )
+        data = SplitActivityData(original_start=start, original_duration_seconds=30 * 60, activities=activities)
 
         assert not data.is_valid()
         errors = data.validate()
@@ -155,14 +124,10 @@ class TestSplitActivityData:
         start = datetime(2025, 1, 15, 14, 0, 0, tzinfo=UTC)
         activities = [
             ActivityLine("short", start, 0, 30),  # 30 seconds, too short
-            ActivityLine("rest", start + timedelta(seconds=30), 29, 30)
+            ActivityLine("rest", start + timedelta(seconds=30), 29, 30),
         ]
 
-        data = SplitActivityData(
-            original_start=start,
-            original_duration_seconds=30 * 60,
-            activities=activities
-        )
+        data = SplitActivityData(original_start=start, original_duration_seconds=30 * 60, activities=activities)
 
         assert not data.is_valid()
         errors = data.validate()
@@ -175,11 +140,7 @@ class TestSplitActivityData:
             ActivityLine("test", start, 20, 0)  # Ends 10 minutes early
         ]
 
-        data = SplitActivityData(
-            original_start=start,
-            original_duration_seconds=30 * 60,
-            activities=activities
-        )
+        data = SplitActivityData(original_start=start, original_duration_seconds=30 * 60, activities=activities)
 
         assert not data.is_valid()
         errors = data.validate()
@@ -188,15 +149,12 @@ class TestSplitActivityData:
     def test_total_duration_mismatch(self) -> None:
         """Test validation fails if total duration doesn't match."""
         start = datetime(2025, 1, 15, 14, 0, 0, tzinfo=UTC)
-        activities = [
-            ActivityLine("test1", start, 10, 0),
-            ActivityLine("test2", start + timedelta(minutes=10), 10, 0)
-        ]
+        activities = [ActivityLine("test1", start, 10, 0), ActivityLine("test2", start + timedelta(minutes=10), 10, 0)]
 
         data = SplitActivityData(
             original_start=start,
             original_duration_seconds=30 * 60,  # Should be 20 * 60
-            activities=activities
+            activities=activities,
         )
 
         assert not data.is_valid()
@@ -207,16 +165,9 @@ class TestSplitActivityData:
         """Test validation allows 1 second tolerance for rounding."""
         start = datetime(2025, 1, 15, 14, 0, 0, tzinfo=UTC)
         # Total: 29 minutes 59 seconds (1 second short, should be tolerated)
-        activities = [
-            ActivityLine("test1", start, 15, 0),
-            ActivityLine("test2", start + timedelta(minutes=15), 14, 59)
-        ]
+        activities = [ActivityLine("test1", start, 15, 0), ActivityLine("test2", start + timedelta(minutes=15), 14, 59)]
 
-        data = SplitActivityData(
-            original_start=start,
-            original_duration_seconds=30 * 60,
-            activities=activities
-        )
+        data = SplitActivityData(original_start=start, original_duration_seconds=30 * 60, activities=activities)
 
         assert data.is_valid()
 
@@ -294,10 +245,7 @@ class TestTimeCalculatorAdjustDuration:
     def test_increase_duration(self) -> None:
         """Test increasing an activity's duration."""
         start = datetime(2025, 1, 15, 14, 0, 0, tzinfo=UTC)
-        activities = [
-            ActivityLine("lunch", start, 15, 0),
-            ActivityLine("phone", start + timedelta(minutes=15), 15, 0)
-        ]
+        activities = [ActivityLine("lunch", start, 15, 0), ActivityLine("phone", start + timedelta(minutes=15), 15, 0)]
 
         # Increase first activity from 15 to 20 minutes
         new_activities = TimeCalculator.adjust_duration(activities, 0, 20)
@@ -310,10 +258,7 @@ class TestTimeCalculatorAdjustDuration:
     def test_decrease_duration(self) -> None:
         """Test decreasing an activity's duration."""
         start = datetime(2025, 1, 15, 14, 0, 0, tzinfo=UTC)
-        activities = [
-            ActivityLine("lunch", start, 20, 0),
-            ActivityLine("phone", start + timedelta(minutes=20), 10, 0)
-        ]
+        activities = [ActivityLine("lunch", start, 20, 0), ActivityLine("phone", start + timedelta(minutes=20), 10, 0)]
 
         # Decrease first activity from 20 to 15 minutes
         new_activities = TimeCalculator.adjust_duration(activities, 0, 15)
@@ -328,7 +273,7 @@ class TestTimeCalculatorAdjustDuration:
         activities = [
             ActivityLine("a", start, 10, 0),
             ActivityLine("b", start + timedelta(minutes=10), 10, 0),
-            ActivityLine("c", start + timedelta(minutes=20), 10, 0)
+            ActivityLine("c", start + timedelta(minutes=20), 10, 0),
         ]
 
         # Increase middle activity from 10 to 15 minutes
@@ -361,10 +306,7 @@ class TestTimeCalculatorAdjustStartTime:
     def test_adjust_start_time_second_activity(self) -> None:
         """Test adjusting start time of second activity."""
         start = datetime(2025, 1, 15, 14, 0, 0, tzinfo=UTC)
-        activities = [
-            ActivityLine("lunch", start, 20, 0),
-            ActivityLine("phone", start + timedelta(minutes=20), 10, 0)
-        ]
+        activities = [ActivityLine("lunch", start, 20, 0), ActivityLine("phone", start + timedelta(minutes=20), 10, 0)]
 
         # Move second activity to start 5 minutes earlier
         new_start = start + timedelta(minutes=15)
@@ -381,7 +323,7 @@ class TestTimeCalculatorAdjustStartTime:
         activities = [
             ActivityLine("a", start, 10, 0),
             ActivityLine("b", start + timedelta(minutes=10), 10, 0),
-            ActivityLine("c", start + timedelta(minutes=20), 10, 0)
+            ActivityLine("c", start + timedelta(minutes=20), 10, 0),
         ]
 
         # Move middle activity to start 5 minutes later
@@ -406,10 +348,7 @@ class TestTimeCalculatorAdjustStartTime:
     def test_adjust_would_make_previous_too_short(self) -> None:
         """Test error if adjustment would make previous activity < 1 minute."""
         start = datetime(2025, 1, 15, 14, 0, 0, tzinfo=UTC)
-        activities = [
-            ActivityLine("a", start, 5, 0),
-            ActivityLine("b", start + timedelta(minutes=5), 5, 0)
-        ]
+        activities = [ActivityLine("a", start, 5, 0), ActivityLine("b", start + timedelta(minutes=5), 5, 0)]
 
         # Try to move second activity too early
         new_start = start + timedelta(seconds=30)  # Only 30 seconds for first activity
@@ -425,16 +364,14 @@ class TestTimeCalculatorAddActivity:
         """Test adding activity with equal distribution."""
         start = datetime(2025, 1, 15, 14, 0, 0, tzinfo=UTC)
         duration = 30 * 60
-        activities = [
-            ActivityLine("lunch", start, 30, 0)
-        ]
+        activities = [ActivityLine("lunch", start, 30, 0)]
 
         new_activities = TimeCalculator.add_activity(
             activities,
             start + timedelta(seconds=duration),
             equal_distribution=True,
             original_start=start,
-            original_duration_seconds=duration
+            original_duration_seconds=duration,
         )
 
         # Now 2 activities with 15 minutes each
@@ -448,17 +385,10 @@ class TestTimeCalculatorAddActivity:
         """Test adding activity by borrowing time from last activity."""
         start = datetime(2025, 1, 15, 14, 0, 0, tzinfo=UTC)
         duration = 30 * 60
-        activities = [
-            ActivityLine("lunch", start, 15, 0),
-            ActivityLine("phone", start + timedelta(minutes=15), 15, 0)
-        ]
+        activities = [ActivityLine("lunch", start, 15, 0), ActivityLine("phone", start + timedelta(minutes=15), 15, 0)]
 
         original_end = start + timedelta(seconds=duration)
-        new_activities = TimeCalculator.add_activity(
-            activities,
-            original_end,
-            equal_distribution=False
-        )
+        new_activities = TimeCalculator.add_activity(activities, original_end, equal_distribution=False)
 
         # Last activity gets remaining time
         assert len(new_activities) == 3
@@ -468,17 +398,10 @@ class TestTimeCalculatorAddActivity:
     def test_cannot_add_if_last_too_short(self) -> None:
         """Test cannot add activity if last one is only 1 minute."""
         start = datetime(2025, 1, 15, 14, 0, 0, tzinfo=UTC)
-        activities = [
-            ActivityLine("a", start, 29, 0),
-            ActivityLine("b", start + timedelta(minutes=29), 1, 0)
-        ]
+        activities = [ActivityLine("a", start, 29, 0), ActivityLine("b", start + timedelta(minutes=29), 1, 0)]
 
         with pytest.raises(ValueError, match="Last activity must have more than 1 minute"):
-            TimeCalculator.add_activity(
-                activities,
-                start + timedelta(minutes=30),
-                equal_distribution=False
-            )
+            TimeCalculator.add_activity(activities, start + timedelta(minutes=30), equal_distribution=False)
 
     def test_add_requires_params_for_equal_distribution(self) -> None:
         """Test equal distribution requires original_start and original_duration_seconds."""
@@ -486,9 +409,7 @@ class TestTimeCalculatorAddActivity:
 
         with pytest.raises(ValueError, match="required for equal distribution"):
             TimeCalculator.add_activity(
-                activities,
-                datetime(2025, 1, 1, 10, 10, 0, tzinfo=UTC),
-                equal_distribution=True
+                activities, datetime(2025, 1, 1, 10, 10, 0, tzinfo=UTC), equal_distribution=True
             )
 
 
@@ -498,10 +419,7 @@ class TestTimeCalculatorRemoveActivity:
     def test_remove_first_activity(self) -> None:
         """Test removing first activity adds its duration to next one."""
         start = datetime(2025, 1, 15, 14, 0, 0, tzinfo=UTC)
-        activities = [
-            ActivityLine("lunch", start, 15, 0),
-            ActivityLine("phone", start + timedelta(minutes=15), 15, 0)
-        ]
+        activities = [ActivityLine("lunch", start, 15, 0), ActivityLine("phone", start + timedelta(minutes=15), 15, 0)]
 
         new_activities = TimeCalculator.remove_activity(activities, 0)
 
@@ -514,10 +432,7 @@ class TestTimeCalculatorRemoveActivity:
     def test_remove_last_activity(self) -> None:
         """Test removing last activity adds its duration to previous one."""
         start = datetime(2025, 1, 15, 14, 0, 0, tzinfo=UTC)
-        activities = [
-            ActivityLine("lunch", start, 15, 0),
-            ActivityLine("phone", start + timedelta(minutes=15), 15, 0)
-        ]
+        activities = [ActivityLine("lunch", start, 15, 0), ActivityLine("phone", start + timedelta(minutes=15), 15, 0)]
 
         new_activities = TimeCalculator.remove_activity(activities, 1)
 
@@ -532,7 +447,7 @@ class TestTimeCalculatorRemoveActivity:
         activities = [
             ActivityLine("a", start, 10, 0),
             ActivityLine("b", start + timedelta(minutes=10), 10, 0),
-            ActivityLine("c", start + timedelta(minutes=20), 10, 0)
+            ActivityLine("c", start + timedelta(minutes=20), 10, 0),
         ]
 
         new_activities = TimeCalculator.remove_activity(activities, 1)
@@ -575,11 +490,7 @@ class TestTimeCalculatorIntegration:
         activities = TimeCalculator.adjust_duration(activities, 0, 20, original_end)
 
         # Create SplitActivityData and validate
-        data = SplitActivityData(
-            original_start=start,
-            original_duration_seconds=duration,
-            activities=activities
-        )
+        data = SplitActivityData(original_start=start, original_duration_seconds=duration, activities=activities)
 
         assert data.is_valid()
 
@@ -597,7 +508,7 @@ class TestTimeCalculatorIntegration:
             start + timedelta(seconds=duration),
             equal_distribution=True,
             original_start=start,
-            original_duration_seconds=duration
+            original_duration_seconds=duration,
         )
 
         # Verify we have 3
@@ -610,9 +521,5 @@ class TestTimeCalculatorIntegration:
         assert len(activities) == 2
 
         # Validate consistency
-        data = SplitActivityData(
-            original_start=start,
-            original_duration_seconds=duration,
-            activities=activities
-        )
+        data = SplitActivityData(original_start=start, original_duration_seconds=duration, activities=activities)
         assert data.is_valid()

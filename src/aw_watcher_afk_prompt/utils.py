@@ -68,8 +68,12 @@ def format_time_local(dt: datetime.datetime, include_seconds: bool = False) -> s
     # We check if it contains AM/PM indicators to detect 12-hour preference
     try:
         locale_time_format = locale.nl_langinfo(locale.T_FMT)
-        use_12_hour = "%p" in locale_time_format or "%P" in locale_time_format or \
-                      "%I" in locale_time_format or "%r" in locale_time_format
+        use_12_hour = (
+            "%p" in locale_time_format
+            or "%P" in locale_time_format
+            or "%I" in locale_time_format
+            or "%r" in locale_time_format
+        )
     except (AttributeError, locale.Error):
         # Fallback: use 24-hour format if we can't determine locale
         use_12_hour = False

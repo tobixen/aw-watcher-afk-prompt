@@ -10,6 +10,7 @@ from aw_core.log import setup_logging
 from requests.exceptions import ConnectionError, HTTPError
 
 import aw_watcher_afk_prompt.dialog as aw_dialog
+from aw_watcher_afk_prompt._version import __version__
 from aw_watcher_afk_prompt.config import load_config
 from aw_watcher_afk_prompt.core import (
     DATA_KEY,
@@ -34,7 +35,7 @@ def prompt(event: aw_core.Event, recent_events: Iterable[aw_core.Event]) -> str 
         prompt_text,
         [event.data.get(DATA_KEY, "") for event in recent_events],
         afk_start=event.timestamp,
-        afk_duration_seconds=event.duration.total_seconds()
+        afk_duration_seconds=event.duration.total_seconds(),
     )
 
 
@@ -59,8 +60,9 @@ def parse_date(date_str: str):
     return start, end
 
 
-def get_state_retries(client: ActivityWatchClient, enable_lid_events: bool = True,
-                      history_limit: int = 100) -> AWAfkPromptClient:
+def get_state_retries(
+    client: ActivityWatchClient, enable_lid_events: bool = True, history_limit: int = 100
+) -> AWAfkPromptClient:
     """When the computer is starting up sometimes the aw-server is not ready for requests yet.
 
     So we sit and retry for a while before giving up.
@@ -69,8 +71,7 @@ def get_state_retries(client: ActivityWatchClient, enable_lid_events: bool = Tru
         try:
             # This works because the constructor of AWAfkPromptState tries to get bucket names.
             # If it didn't we'd need to do something else here.
-            return AWAfkPromptClient(client, enable_lid_events=enable_lid_events,
-                                   history_limit=history_limit)
+            return AWAfkPromptClient(client, enable_lid_events=enable_lid_events, history_limit=history_limit)
         except ConnectionError:
             logger.exception("Cannot connect to client.")
             time.sleep(10)  # 10 * 10 = wait for 100s before giving up.
@@ -82,6 +83,7 @@ def main() -> None:
     config = load_config()
 
     parser = argparse.ArgumentParser()
+    parser.add_argument("--version", "-V", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument(
         "--depth",
         type=float,
@@ -165,13 +167,18 @@ def main() -> None:
 
         start_time_str = format_time_local(test_start)
         end_time_str = format_time_local(test_start + timedelta(seconds=test_duration_seconds))
-        test_prompt = f"What were you doing from {start_time_str} - {end_time_str} ({format_duration(test_duration_seconds)})?"
+        test_prompt = (
+            f"What were you doing from {start_time_str} - {end_time_str} ({format_duration(test_duration_seconds)})?"
+        )
         title = "AFK Checkin (TEST MODE)"
 
         # Show dialog with split mode support
         result = aw_dialog.ask_string(
-            title, test_prompt, history=["test1", "test2", "lunch", "meeting"],
-            afk_start=test_start, afk_duration_seconds=test_duration_seconds
+            title,
+            test_prompt,
+            history=["test1", "test2", "lunch", "meeting"],
+            afk_start=test_start,
+            afk_duration_seconds=test_duration_seconds,
         )
 
         logger.info("Test dialog closed, processing result...")
@@ -211,9 +218,7 @@ def main() -> None:
         logger.info(f"Edit mode: reviewing entries from {args.edit_date}")
 
         try:
-            client = ActivityWatchClient(
-                client_name=WATCHER_NAME + "_edit", testing=args.testing
-            )
+            client = ActivityWatchClient(client_name=WATCHER_NAME + "_edit", testing=args.testing)
             with client:
                 bucket_id = f"{WATCHER_NAME}_{client.client_hostname}"
 
@@ -259,9 +264,7 @@ def main() -> None:
         )
         with client:
             state = get_state_retries(
-                client,
-                enable_lid_events=config.get("enable_lid_events", True),
-                history_limit=args.history_limit
+                client, enable_lid_events=config.get("enable_lid_events", True), history_limit=args.history_limit
             )
             logger.info("Successfully connected to the server.")
 
@@ -269,9 +272,12 @@ def main() -> None:
             if args.backfill:
                 logger.info(f"Backfill mode enabled, looking back {args.backfill_depth} minutes")
                 try:
-                    backfill_events = list(state.get_new_afk_events_to_note(
-                        seconds=args.backfill_depth * 60, durration_thresh=args.length * 60
-                    ) or [])
+                    backfill_events = list(
+                        state.get_new_afk_events_to_note(
+                            seconds=args.backfill_depth * 60, durration_thresh=args.length * 60
+                        )
+                        or []
+                    )
                 except (ConnectionError, HTTPError) as e:
                     logger.warning(f"Backfill failed due to server error: {e}")
                     backfill_events = []
@@ -329,10 +335,7 @@ def main() -> None:
                     down_duration = time.monotonic() - server_down_since
                     if down_duration >= 300 and not server_down_notified:
                         server_down_notified = True
-                        logger.error(
-                            f"Server has been unreachable for "
-                            f"{int(down_duration // 60)} minutes"
-                        )
+                        logger.error(f"Server has been unreachable for {int(down_duration // 60)} minutes")
                         messagebox.showwarning(
                             "AW Watcher AFK Prompt: Server Unreachable",
                             "The ActivityWatch server has been unreachable for over "

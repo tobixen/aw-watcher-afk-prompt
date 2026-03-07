@@ -106,19 +106,17 @@ class SplitActivityData:
 
             # Check minimum duration
             if current.duration_minutes < 1:
-                errors.append(f"Activity {i+1} duration must be at least 1 minute")
+                errors.append(f"Activity {i + 1} duration must be at least 1 minute")
 
             # Check no gap between activities (allow ±1 second tolerance for rounding)
             if current.end_time != next_activity.start_time:
                 gap_seconds = (next_activity.start_time - current.end_time).total_seconds()
                 if abs(gap_seconds) > 1.0:
                     if gap_seconds > 0:
-                        errors.append(
-                            f"Gap detected between activity {i+1} and {i+2}: {gap_seconds:.1f} seconds"
-                        )
+                        errors.append(f"Gap detected between activity {i + 1} and {i + 2}: {gap_seconds:.1f} seconds")
                     else:
                         errors.append(
-                            f"Overlap detected between activity {i+1} and {i+2}: {-gap_seconds:.1f} seconds"
+                            f"Overlap detected between activity {i + 1} and {i + 2}: {-gap_seconds:.1f} seconds"
                         )
 
         # Check last activity minimum duration
@@ -167,10 +165,7 @@ class TimeCalculator:
 
     @staticmethod
     def split_equal(
-        start: datetime,
-        duration_seconds: float,
-        num_activities: int,
-        descriptions: list[str] | None = None
+        start: datetime, duration_seconds: float, num_activities: int, descriptions: list[str] | None = None
     ) -> list[ActivityLine]:
         """Split an AFK period into equal-duration activities.
 
@@ -212,7 +207,7 @@ class TimeCalculator:
                 description=descriptions[i],
                 start_time=current_start,
                 duration_minutes=duration_mins,
-                duration_seconds=duration_secs
+                duration_seconds=duration_secs,
             )
             activities.append(activity)
             current_start = activity.end_time
@@ -221,10 +216,7 @@ class TimeCalculator:
 
     @staticmethod
     def adjust_duration(
-        activities: list[ActivityLine],
-        index: int,
-        new_duration_minutes: int,
-        original_end: datetime | None = None
+        activities: list[ActivityLine], index: int, new_duration_minutes: int, original_end: datetime | None = None
     ) -> list[ActivityLine]:
         """Adjust the duration of an activity and update subsequent activities.
 
@@ -266,10 +258,7 @@ class TimeCalculator:
             # Recursively adjust the previous activity
             # This will handle cascading changes if there are more activities
             return TimeCalculator.adjust_duration(
-                activities,
-                index=index - 1,
-                new_duration_minutes=prev_new_duration_minutes,
-                original_end=original_end
+                activities, index=index - 1, new_duration_minutes=prev_new_duration_minutes, original_end=original_end
             )
 
         # Create a copy to avoid mutating the original
@@ -277,20 +266,24 @@ class TimeCalculator:
         for i, activity in enumerate(activities):
             if i < index:
                 # Activities before the changed one remain the same
-                new_activities.append(ActivityLine(
-                    description=activity.description,
-                    start_time=activity.start_time,
-                    duration_minutes=activity.duration_minutes,
-                    duration_seconds=activity.duration_seconds
-                ))
+                new_activities.append(
+                    ActivityLine(
+                        description=activity.description,
+                        start_time=activity.start_time,
+                        duration_minutes=activity.duration_minutes,
+                        duration_seconds=activity.duration_seconds,
+                    )
+                )
             elif i == index:
                 # This is the activity being changed
-                new_activities.append(ActivityLine(
-                    description=activity.description,
-                    start_time=activity.start_time,
-                    duration_minutes=new_duration_minutes,
-                    duration_seconds=activity.duration_seconds
-                ))
+                new_activities.append(
+                    ActivityLine(
+                        description=activity.description,
+                        start_time=activity.start_time,
+                        duration_minutes=new_duration_minutes,
+                        duration_seconds=activity.duration_seconds,
+                    )
+                )
             elif i == len(activities) - 1 and original_end is not None:
                 # Last activity: adjust duration to reach original_end
                 prev_end = new_activities[-1].end_time
@@ -298,30 +291,31 @@ class TimeCalculator:
                 if remaining_seconds < 60:
                     raise ValueError("Adjusted duration would make last activity less than 1 minute")
 
-                new_activities.append(ActivityLine(
-                    description=activity.description,
-                    start_time=prev_end,
-                    duration_minutes=int(remaining_seconds // 60),
-                    duration_seconds=int(remaining_seconds % 60)
-                ))
+                new_activities.append(
+                    ActivityLine(
+                        description=activity.description,
+                        start_time=prev_end,
+                        duration_minutes=int(remaining_seconds // 60),
+                        duration_seconds=int(remaining_seconds % 60),
+                    )
+                )
             else:
                 # Subsequent activities: shift start time based on previous activity's end
                 prev_end = new_activities[-1].end_time
-                new_activities.append(ActivityLine(
-                    description=activity.description,
-                    start_time=prev_end,
-                    duration_minutes=activity.duration_minutes,
-                    duration_seconds=activity.duration_seconds
-                ))
+                new_activities.append(
+                    ActivityLine(
+                        description=activity.description,
+                        start_time=prev_end,
+                        duration_minutes=activity.duration_minutes,
+                        duration_seconds=activity.duration_seconds,
+                    )
+                )
 
         return new_activities
 
     @staticmethod
     def adjust_start_time(
-        activities: list[ActivityLine],
-        index: int,
-        new_start: datetime,
-        original_end: datetime | None = None
+        activities: list[ActivityLine], index: int, new_start: datetime, original_end: datetime | None = None
     ) -> list[ActivityLine]:
         """Adjust the start time of an activity and update related activities.
 
@@ -347,24 +341,28 @@ class TimeCalculator:
         for i, activity in enumerate(activities):
             if i < index - 1:
                 # Activities before the previous one remain the same
-                new_activities.append(ActivityLine(
-                    description=activity.description,
-                    start_time=activity.start_time,
-                    duration_minutes=activity.duration_minutes,
-                    duration_seconds=activity.duration_seconds
-                ))
+                new_activities.append(
+                    ActivityLine(
+                        description=activity.description,
+                        start_time=activity.start_time,
+                        duration_minutes=activity.duration_minutes,
+                        duration_seconds=activity.duration_seconds,
+                    )
+                )
             elif i == index - 1:
                 # Previous activity: adjust duration to reach new start time
                 new_duration_seconds = (new_start - activity.start_time).total_seconds()
                 if new_duration_seconds < 60:
                     raise ValueError("Adjusted duration would be less than 1 minute")
 
-                new_activities.append(ActivityLine(
-                    description=activity.description,
-                    start_time=activity.start_time,
-                    duration_minutes=int(new_duration_seconds // 60),
-                    duration_seconds=int(new_duration_seconds % 60)
-                ))
+                new_activities.append(
+                    ActivityLine(
+                        description=activity.description,
+                        start_time=activity.start_time,
+                        duration_minutes=int(new_duration_seconds // 60),
+                        duration_seconds=int(new_duration_seconds % 60),
+                    )
+                )
             elif i == index:
                 # This is the activity being changed
                 if i == len(activities) - 1 and original_end is not None:
@@ -373,20 +371,24 @@ class TimeCalculator:
                     if remaining_seconds < 60:
                         raise ValueError("Adjusted duration would make last activity less than 1 minute")
 
-                    new_activities.append(ActivityLine(
-                        description=activity.description,
-                        start_time=new_start,
-                        duration_minutes=int(remaining_seconds // 60),
-                        duration_seconds=int(remaining_seconds % 60)
-                    ))
+                    new_activities.append(
+                        ActivityLine(
+                            description=activity.description,
+                            start_time=new_start,
+                            duration_minutes=int(remaining_seconds // 60),
+                            duration_seconds=int(remaining_seconds % 60),
+                        )
+                    )
                 else:
                     # Not the last activity: keep original duration
-                    new_activities.append(ActivityLine(
-                        description=activity.description,
-                        start_time=new_start,
-                        duration_minutes=activity.duration_minutes,
-                        duration_seconds=activity.duration_seconds
-                    ))
+                    new_activities.append(
+                        ActivityLine(
+                            description=activity.description,
+                            start_time=new_start,
+                            duration_minutes=activity.duration_minutes,
+                            duration_seconds=activity.duration_seconds,
+                        )
+                    )
             elif i == len(activities) - 1 and original_end is not None:
                 # Last activity: adjust duration to reach original_end
                 prev_end = new_activities[-1].end_time
@@ -394,21 +396,25 @@ class TimeCalculator:
                 if remaining_seconds < 60:
                     raise ValueError("Adjusted duration would make last activity less than 1 minute")
 
-                new_activities.append(ActivityLine(
-                    description=activity.description,
-                    start_time=prev_end,
-                    duration_minutes=int(remaining_seconds // 60),
-                    duration_seconds=int(remaining_seconds % 60)
-                ))
+                new_activities.append(
+                    ActivityLine(
+                        description=activity.description,
+                        start_time=prev_end,
+                        duration_minutes=int(remaining_seconds // 60),
+                        duration_seconds=int(remaining_seconds % 60),
+                    )
+                )
             else:
                 # Subsequent activities: shift start time based on previous activity's end
                 prev_end = new_activities[-1].end_time
-                new_activities.append(ActivityLine(
-                    description=activity.description,
-                    start_time=prev_end,
-                    duration_minutes=activity.duration_minutes,
-                    duration_seconds=activity.duration_seconds
-                ))
+                new_activities.append(
+                    ActivityLine(
+                        description=activity.description,
+                        start_time=prev_end,
+                        duration_minutes=activity.duration_minutes,
+                        duration_seconds=activity.duration_seconds,
+                    )
+                )
 
         return new_activities
 
@@ -418,7 +424,7 @@ class TimeCalculator:
         original_end: datetime,
         equal_distribution: bool = False,
         original_start: datetime | None = None,
-        original_duration_seconds: float | None = None
+        original_duration_seconds: float | None = None,
     ) -> list[ActivityLine]:
         """Add a new activity line.
 
@@ -442,10 +448,7 @@ class TimeCalculator:
             # Redistribute time equally
             descriptions = [a.description for a in activities] + [""]
             return TimeCalculator.split_equal(
-                original_start,
-                original_duration_seconds,
-                len(activities) + 1,
-                descriptions
+                original_start, original_duration_seconds, len(activities) + 1, descriptions
             )
         else:
             # Borrow 1 minute from last activity
@@ -459,7 +462,7 @@ class TimeCalculator:
                     description=last.description,
                     start_time=last.start_time,
                     duration_minutes=last.duration_minutes - 1,
-                    duration_seconds=last.duration_seconds
+                    duration_seconds=last.duration_seconds,
                 )
             ]
 
@@ -467,12 +470,14 @@ class TimeCalculator:
             new_start = new_activities[-1].end_time
             remaining_seconds = (original_end - new_start).total_seconds()
 
-            new_activities.append(ActivityLine(
-                description="",
-                start_time=new_start,
-                duration_minutes=int(remaining_seconds // 60),
-                duration_seconds=int(remaining_seconds % 60)
-            ))
+            new_activities.append(
+                ActivityLine(
+                    description="",
+                    start_time=new_start,
+                    duration_minutes=int(remaining_seconds // 60),
+                    duration_seconds=int(remaining_seconds % 60),
+                )
+            )
 
             return new_activities
 
@@ -508,21 +513,25 @@ class TimeCalculator:
                 elif i == 1:
                     # Next activity gets the removed activity's duration
                     total_seconds = removed.total_duration_seconds + activity.total_duration_seconds
-                    new_activities.append(ActivityLine(
-                        description=activity.description,
-                        start_time=removed.start_time,  # Use removed activity's start time
-                        duration_minutes=int(total_seconds // 60),
-                        duration_seconds=int(total_seconds % 60)
-                    ))
+                    new_activities.append(
+                        ActivityLine(
+                            description=activity.description,
+                            start_time=removed.start_time,  # Use removed activity's start time
+                            duration_minutes=int(total_seconds // 60),
+                            duration_seconds=int(total_seconds % 60),
+                        )
+                    )
                 else:
                     # Subsequent activities shift start times
                     prev_end = new_activities[-1].end_time
-                    new_activities.append(ActivityLine(
-                        description=activity.description,
-                        start_time=prev_end,
-                        duration_minutes=activity.duration_minutes,
-                        duration_seconds=activity.duration_seconds
-                    ))
+                    new_activities.append(
+                        ActivityLine(
+                            description=activity.description,
+                            start_time=prev_end,
+                            duration_minutes=activity.duration_minutes,
+                            duration_seconds=activity.duration_seconds,
+                        )
+                    )
         else:
             # Removing non-first activity: add its duration to the previous one
             for i, activity in enumerate(activities):
@@ -531,29 +540,35 @@ class TimeCalculator:
                 elif i == index - 1:
                     # Previous activity gets the removed activity's duration
                     total_seconds = activity.total_duration_seconds + removed.total_duration_seconds
-                    new_activities.append(ActivityLine(
-                        description=activity.description,
-                        start_time=activity.start_time,
-                        duration_minutes=int(total_seconds // 60),
-                        duration_seconds=int(total_seconds % 60)
-                    ))
+                    new_activities.append(
+                        ActivityLine(
+                            description=activity.description,
+                            start_time=activity.start_time,
+                            duration_minutes=int(total_seconds // 60),
+                            duration_seconds=int(total_seconds % 60),
+                        )
+                    )
                 elif i > index:
                     # Subsequent activities shift start times
                     prev_end = new_activities[-1].end_time
-                    new_activities.append(ActivityLine(
-                        description=activity.description,
-                        start_time=prev_end,
-                        duration_minutes=activity.duration_minutes,
-                        duration_seconds=activity.duration_seconds
-                    ))
+                    new_activities.append(
+                        ActivityLine(
+                            description=activity.description,
+                            start_time=prev_end,
+                            duration_minutes=activity.duration_minutes,
+                            duration_seconds=activity.duration_seconds,
+                        )
+                    )
                 else:
                     # Activities before removed one remain the same
-                    new_activities.append(ActivityLine(
-                        description=activity.description,
-                        start_time=activity.start_time,
-                        duration_minutes=activity.duration_minutes,
-                        duration_seconds=activity.duration_seconds
-                    ))
+                    new_activities.append(
+                        ActivityLine(
+                            description=activity.description,
+                            start_time=activity.start_time,
+                            duration_minutes=activity.duration_minutes,
+                            duration_seconds=activity.duration_seconds,
+                        )
+                    )
 
         return new_activities
 
@@ -562,6 +577,7 @@ class TimeCalculator:
 # UI Components
 # ============================================================================
 
+
 class ActivityLineWidget:
     """Widget for displaying and editing a single activity line.
 
@@ -569,8 +585,16 @@ class ActivityLineWidget:
     Does not use a Frame - widgets are gridded directly into parent.
     """
 
-    def __init__(self, parent, row: int, index: int, activity: ActivityLine,
-                 is_first: bool, on_change_callback, on_remove_callback):
+    def __init__(
+        self,
+        parent,
+        row: int,
+        index: int,
+        activity: ActivityLine,
+        is_first: bool,
+        on_change_callback,
+        on_remove_callback,
+    ):
         """Initialize activity line widget.
 
         Args:
@@ -589,15 +613,17 @@ class ActivityLineWidget:
         self.on_change = on_change_callback
         self.on_remove = on_remove_callback
 
-        logger.debug(f"Creating widget for activity {index}: desc='{activity.description}', "
-                    f"start={activity.start_time.strftime('%H:%M:%S')}, "
-                    f"duration={activity.duration_minutes}m")
+        logger.debug(
+            f"Creating widget for activity {index}: desc='{activity.description}', "
+            f"start={activity.start_time.strftime('%H:%M:%S')}, "
+            f"duration={activity.duration_minutes}m"
+        )
 
         # Description field (editable, EnhancedEntry provides text editing shortcuts)
         self.desc_var = tk.StringVar(master=parent, value=activity.description)
         self.desc_var.trace_add("write", lambda *args: self._on_desc_change())
         self.desc_entry = EnhancedEntry(parent, textvariable=self.desc_var, width=25)
-        self.desc_entry.grid(row=row, column=0, padx=5, pady=2, sticky=tk.W+tk.E)
+        self.desc_entry.grid(row=row, column=0, padx=5, pady=2, sticky=tk.W + tk.E)
 
         # Start time field (read-only for first, editable for others)
         # Use locale-aware formatting with timezone conversion
@@ -605,21 +631,23 @@ class ActivityLineWidget:
         self.start_var = tk.StringVar(master=parent, value=start_str)
         if not is_first:
             self.start_var.trace_add("write", lambda *args: self._on_start_change())
-        self.start_entry = ttk.Entry(parent, textvariable=self.start_var, width=10,
-                               state="readonly" if is_first else "normal",
-                               takefocus=0 if is_first else 1)
+        self.start_entry = ttk.Entry(
+            parent,
+            textvariable=self.start_var,
+            width=10,
+            state="readonly" if is_first else "normal",
+            takefocus=0 if is_first else 1,
+        )
         self.start_entry.grid(row=row, column=1, padx=5, pady=2)
 
         # Duration field (minutes only, editable)
         self.duration_var = tk.IntVar(master=parent, value=activity.duration_minutes)
         self.duration_var.trace_add("write", lambda *args: self._on_duration_change())
-        self.duration_spinbox = ttk.Spinbox(parent, from_=1, to=9999, width=6,
-                                      textvariable=self.duration_var)
+        self.duration_spinbox = ttk.Spinbox(parent, from_=1, to=9999, width=6, textvariable=self.duration_var)
         self.duration_spinbox.grid(row=row, column=2, padx=5, pady=2)
 
         # Remove button
-        self.remove_btn = ttk.Button(parent, text="−", width=3,
-                               command=lambda: self.on_remove(index))
+        self.remove_btn = ttk.Button(parent, text="−", width=3, command=lambda: self.on_remove(index))
         self.remove_btn.grid(row=row, column=3, padx=5, pady=2)
 
     def _on_desc_change(self):
@@ -705,9 +733,9 @@ class SplitActivityDialog(simpledialog.Dialog):
     - Automatic time consistency enforcement
     """
 
-    def __init__(self, parent, title: str, prompt: str,
-                 afk_start: datetime, afk_duration_seconds: float,
-                 history: list[str]):
+    def __init__(
+        self, parent, title: str, prompt: str, afk_start: datetime, afk_duration_seconds: float, history: list[str]
+    ):
         """Initialize the split activity dialog.
 
         Args:
@@ -725,9 +753,7 @@ class SplitActivityDialog(simpledialog.Dialog):
         self.history = history
 
         # Initialize with 2 equal activities
-        self.activities = TimeCalculator.split_equal(
-            afk_start, afk_duration_seconds, 2
-        )
+        self.activities = TimeCalculator.split_equal(afk_start, afk_duration_seconds, 2)
         self.equal_distribution_mode = True  # Track if user has edited durations
 
         self.activity_widgets = []
@@ -740,7 +766,7 @@ class SplitActivityDialog(simpledialog.Dialog):
     def body(self, master):
         """Create the dialog body with activity line widgets."""
         self.master_frame = ttk.Frame(master)
-        self.master_frame.grid(sticky=tk.W+tk.E+tk.N+tk.S)
+        self.master_frame.grid(sticky=tk.W + tk.E + tk.N + tk.S)
 
         # Prompt label
         prompt_label = ttk.Label(self.master_frame, text=self.prompt, justify=tk.LEFT)
@@ -748,11 +774,14 @@ class SplitActivityDialog(simpledialog.Dialog):
 
         # Header row
         ttk.Label(self.master_frame, text="Description", font=("TkDefaultFont", 9, "bold")).grid(
-            row=1, column=0, padx=5, pady=2, sticky=tk.W)
+            row=1, column=0, padx=5, pady=2, sticky=tk.W
+        )
         ttk.Label(self.master_frame, text="Start", font=("TkDefaultFont", 9, "bold")).grid(
-            row=1, column=1, padx=5, pady=2, sticky=tk.W)
+            row=1, column=1, padx=5, pady=2, sticky=tk.W
+        )
         ttk.Label(self.master_frame, text="Mins", font=("TkDefaultFont", 9, "bold")).grid(
-            row=1, column=2, padx=5, pady=2, sticky=tk.W)
+            row=1, column=2, padx=5, pady=2, sticky=tk.W
+        )
 
         # Activities will be drawn starting at row 2
         self.first_activity_row = 2
@@ -789,7 +818,7 @@ class SplitActivityDialog(simpledialog.Dialog):
                 activity=activity,
                 is_first=(i == 0),
                 on_change_callback=lambda field, value, idx=i: self.on_activity_changed(idx, field, value),
-                on_remove_callback=self.remove_activity_line
+                on_remove_callback=self.remove_activity_line,
             )
             self.activity_widgets.append(widget)
 
@@ -817,7 +846,7 @@ class SplitActivityDialog(simpledialog.Dialog):
                     description=value,
                     start_time=activity.start_time,
                     duration_minutes=activity.duration_minutes,
-                    duration_seconds=activity.duration_seconds
+                    duration_seconds=activity.duration_seconds,
                 )
                 logger.info(f"Activity {changed_index} description updated to: '{value}'")
 
@@ -825,10 +854,7 @@ class SplitActivityDialog(simpledialog.Dialog):
                 # Use TimeCalculator to adjust the duration
                 logger.info(f"Activity {changed_index} duration changed to {value} minutes")
                 self.activities = TimeCalculator.adjust_duration(
-                    self.activities,
-                    index=changed_index,
-                    new_duration_minutes=value,
-                    original_end=self.afk_end
+                    self.activities, index=changed_index, new_duration_minutes=value, original_end=self.afk_end
                 )
 
                 # Log all activity durations after recalculation
@@ -877,10 +903,7 @@ class SplitActivityDialog(simpledialog.Dialog):
 
                     # Use TimeCalculator to adjust the start time
                     self.activities = TimeCalculator.adjust_start_time(
-                        self.activities,
-                        index=changed_index,
-                        new_start=new_start,
-                        original_end=self.afk_end
+                        self.activities, index=changed_index, new_start=new_start, original_end=self.afk_end
                     )
 
                     # Log all activities after recalculation
@@ -910,7 +933,7 @@ class SplitActivityDialog(simpledialog.Dialog):
                 self.afk_end,
                 equal_distribution=self.equal_distribution_mode,
                 original_start=self.afk_start if self.equal_distribution_mode else None,
-                original_duration_seconds=self.afk_duration_seconds if self.equal_distribution_mode else None
+                original_duration_seconds=self.afk_duration_seconds if self.equal_distribution_mode else None,
             )
             self.redraw_activities()
         except ValueError as e:
@@ -960,7 +983,7 @@ class SplitActivityDialog(simpledialog.Dialog):
         data = SplitActivityData(
             original_start=self.afk_start,
             original_duration_seconds=self.afk_duration_seconds,
-            activities=self.activities
+            activities=self.activities,
         )
 
         errors = data.validate()
@@ -981,9 +1004,9 @@ class SplitActivityDialog(simpledialog.Dialog):
         self.result = self.activities
 
 
-def ask_split_activities(title: str, prompt: str, afk_start: datetime,
-                         afk_duration_seconds: float, history: list[str],
-                         parent=None) -> list[ActivityLine] | None | str:
+def ask_split_activities(
+    title: str, prompt: str, afk_start: datetime, afk_duration_seconds: float, history: list[str], parent=None
+) -> list[ActivityLine] | None | str:
     """Show split activity dialog and return list of activities, description, or None.
 
     Args:
@@ -1002,12 +1025,12 @@ def ask_split_activities(title: str, prompt: str, afk_start: datetime,
     if parent is None:
         # Create hidden root if needed
         import tkinter as tk
+
         root = tk.Tk()
         root.withdraw()
         parent = root
 
-    dialog = SplitActivityDialog(parent, title, prompt, afk_start,
-                                 afk_duration_seconds, history)
+    dialog = SplitActivityDialog(parent, title, prompt, afk_start, afk_duration_seconds, history)
 
     # Check if user removed activities down to 1 (return to single mode)
     if dialog.return_to_single_mode:

@@ -16,8 +16,7 @@ class TestFormatTimeLocal:
         # The result should be the local time equivalent
         expected_local = utc_time.astimezone(LOCAL_TIMEZONE)
         # Check that the formatted time matches the local conversion
-        assert result == expected_local.strftime("%H:%M") or \
-               result == expected_local.strftime("%I:%M %p").lstrip("0")
+        assert result == expected_local.strftime("%H:%M") or result == expected_local.strftime("%I:%M %p").lstrip("0")
 
     def test_includes_seconds_when_requested(self) -> None:
         """Test that seconds are included when include_seconds=True."""

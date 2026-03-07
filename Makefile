@@ -18,12 +18,21 @@ help:
 	@echo "WARNING: This large amount of targets was made by an eager AI-bot"
 	@echo "Only enable-service and setup-wayland has been tested, the latter with sway"
 
-install:
-	pip install --user .
-	@echo ""
-	@echo "✓ aw-watcher-afk-prompt installed successfully!"
-	@echo ""
-	@echo "Make sure ~/.local/bin is in your PATH."
+install:  ## Install the package (auto-detects root, uv, pipx, or pip)
+	@if [ "$$(id -u)" = "0" ]; then \
+		echo "Running as root, installing system-wide..."; \
+		pip install .; \
+	elif command -v uv >/dev/null 2>&1; then \
+		echo "Installing with uv..."; \
+		uv tool install .; \
+	elif command -v pipx >/dev/null 2>&1; then \
+		echo "Installing with pipx..."; \
+		pipx install .; \
+	else \
+		echo "Tip: Install uv or pipx for isolated installs (pacman -S uv, apt install pipx, brew install uv)"; \
+		echo "Falling back to pip install --user ..."; \
+		PIP_BREAK_SYSTEM_PACKAGES=1 pip install --user .; \
+	fi
 	@echo ""
 	@echo "Next steps:"
 	@echo "  1. Recommended: Use aw-qt (ActivityWatch GUI)"
@@ -35,12 +44,9 @@ install:
 	@echo "  3. For Wayland users running systemd:"
 	@echo "     make setup-wayland"
 	@echo ""
-	@echo "  4. Test manually:"
-	@echo "     aw-watcher-afk-prompt"
-	@echo ""
 
-install-dev:
-	pip install -e ".[dev]"
+install-dev:  ## Install with development dependencies (editable)
+	PIP_BREAK_SYSTEM_PACKAGES=1 pip install -e ".[dev]"
 
 install-all: install enable-service
 	@echo ""
@@ -52,14 +58,16 @@ install-all: install enable-service
 	@echo ""
 	@echo "Note: Wayland users should also run: make setup-wayland"
 
-test:
-	pytest tests/ -v
+test:  ## Run tests
+	python -m pytest tests/ -v
 
-lint:
-	ruff check .
+lint:  ## Run ruff linter and formatter check
+	python -m ruff check .
+	python -m ruff format --check .
 
-format:
-	ruff format .
+format:  ## Auto-format code
+	python -m ruff check --fix .
+	python -m ruff format .
 
 clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true

@@ -177,8 +177,7 @@ abbreviations = _AbbreviationStore()
 # TODO: This widget pops up off-center when using multiple screes on Linux, possibly other platforms.
 # See https://stackoverflow.com/questions/30312875/tkinter-winfo-screenwidth-when-used-with-dual-monitors/57866046#57866046
 class AWAfkPromptDialog(simpledialog.Dialog):
-    def __init__(self, title: str, prompt: str, history: list[str],
-                 afk_start=None, afk_duration_seconds=None) -> None:
+    def __init__(self, title: str, prompt: str, history: list[str], afk_start=None, afk_duration_seconds=None) -> None:
         self.prompt = prompt
         self.history = history
         self.history_index = len(history)
@@ -326,7 +325,10 @@ class AWAfkPromptDialog(simpledialog.Dialog):
         text = self.entry.get().strip()
         if not text:
             # Don't accept blank entries - show error and keep dialog open
-            messagebox.showerror("Empty Entry", "Please enter a description of what you were doing, or click 'Unknown' to mark as unknown.")
+            messagebox.showerror(
+                "Empty Entry",
+                "Please enter a description of what you were doing, or click 'Unknown' to mark as unknown.",
+            )
             return  # Don't close dialog
         self.result = text
 
@@ -414,10 +416,7 @@ class BatchEditDialog(simpledialog.Dialog):
         scrollbar = ttk.Scrollbar(master, orient="vertical", command=canvas.yview)
         scrollable_frame = ttk.Frame(canvas)
 
-        scrollable_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
+        scrollable_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
 
         canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
@@ -431,9 +430,7 @@ class BatchEditDialog(simpledialog.Dialog):
         canvas.bind_all("<Button-5>", lambda e: canvas.yview_scroll(1, "units"))
 
         # Header
-        ttk.Label(scrollable_frame, text="Time", font=("", 9, "bold")).grid(
-            row=0, column=0, padx=5, pady=2, sticky="w"
-        )
+        ttk.Label(scrollable_frame, text="Time", font=("", 9, "bold")).grid(row=0, column=0, padx=5, pady=2, sticky="w")
         ttk.Label(scrollable_frame, text="Duration", font=("", 9, "bold")).grid(
             row=0, column=1, padx=5, pady=2, sticky="w"
         )
@@ -448,12 +445,8 @@ class BatchEditDialog(simpledialog.Dialog):
             duration_min = event.duration.total_seconds() / 60
             current_msg = event.data.get("message", "")
 
-            ttk.Label(scrollable_frame, text=start_str).grid(
-                row=row, column=0, padx=5, pady=2, sticky="w"
-            )
-            ttk.Label(scrollable_frame, text=f"{duration_min:.0f}m").grid(
-                row=row, column=1, padx=5, pady=2, sticky="w"
-            )
+            ttk.Label(scrollable_frame, text=start_str).grid(row=row, column=0, padx=5, pady=2, sticky="w")
+            ttk.Label(scrollable_frame, text=f"{duration_min:.0f}m").grid(row=row, column=1, padx=5, pady=2, sticky="w")
 
             entry = EnhancedEntry(scrollable_frame, width=50)
             entry.insert(0, current_msg)
@@ -503,9 +496,14 @@ def ask_batch_edit(title: str, events: list, format_time_func) -> list[tuple] | 
     return d.result
 
 
-def ask_string(title: str, prompt: str, history: list[str],
-               afk_start=None, afk_duration_seconds=None,
-               initial_value: str | None = None) -> str | None | tuple:
+def ask_string(
+    title: str,
+    prompt: str,
+    history: list[str],
+    afk_start=None,
+    afk_duration_seconds=None,
+    initial_value: str | None = None,
+) -> str | None | tuple:
     """Ask for a string input, with optional split mode support.
 
     Args:
@@ -541,8 +539,7 @@ def ask_string(title: str, prompt: str, history: list[str],
             from aw_watcher_afk_prompt.split_dialog import ask_split_activities
 
             # Show split dialog
-            result = ask_split_activities(title, prompt, afk_start,
-                                             afk_duration_seconds, history)
+            result = ask_split_activities(title, prompt, afk_start, afk_duration_seconds, history)
 
             # Check what the split dialog returned
             if result is None:
