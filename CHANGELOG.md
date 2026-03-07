@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.6] - 2026-03-07
 
+### Changed
+
+- Work on pyproject.toml, github workflows, precommit, Makefile to adhere to what I consider "best current practices"
+- "black syle" replaced with "ruff"
+
 ### Fixed
 
 - Split dialog: editing a start time now interprets the entered HH:MM value in
