@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-03-07
+
+### Fixed
+
+- Split dialog: editing a start time now interprets the entered HH:MM value in
+  local time rather than UTC.  Previously `old_start.replace(hour, minute)` was
+  applied to the stored UTC datetime, placing the new start time 1–2 hours in
+  the future (depending on UTC offset) and producing a spurious "Adjusted
+  duration would make last activity less than 1 minute" error.
+
 ## [0.1.5] - 2026-02-07
 
 ### Fixed

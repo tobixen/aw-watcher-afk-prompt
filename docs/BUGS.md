@@ -1,4 +1,4 @@
-## On split, it's not possible to edit the timestamps
+## ~~On split, it's not possible to edit the timestamps~~ (Fixed in v0.1.6)
 
 To reproduce:
 

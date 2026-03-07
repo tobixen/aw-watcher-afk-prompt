@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from tkinter import simpledialog, ttk
 
-from aw_watcher_afk_prompt.utils import format_time_local
+from aw_watcher_afk_prompt.utils import LOCAL_TIMEZONE, format_time_local
 from aw_watcher_afk_prompt.widgets import EnhancedEntry
 
 logger = logging.getLogger(__name__)
@@ -864,9 +864,14 @@ class SplitActivityDialog(simpledialog.Dialog):
                         logger.warning(f"Invalid time values: {hours}:{minutes}")
                         return
 
-                    # Create new datetime with same date but updated time
+                    # Create new datetime with same date but updated time.
+                    # The widget displays times in local timezone (format_time_local),
+                    # so the user-entered hour/minute are in local time — convert
+                    # before replacing to avoid treating them as UTC.
                     old_start = self.activities[changed_index].start_time
-                    new_start = old_start.replace(hour=hours, minute=minutes, second=0, microsecond=0)
+                    new_start = old_start.astimezone(LOCAL_TIMEZONE).replace(
+                        hour=hours, minute=minutes, second=0, microsecond=0
+                    )
 
                     logger.info(f"Activity {changed_index} start time changed to {new_start.strftime('%H:%M')}")
 
