@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Log at INFO level when the prompt dialog is cancelled (previously silent, making it impossible to audit missed gaps from the journal).
+- Log a WARNING when an AFK gap expires from the depth window without being answered.
+
 ## [0.1.6] - 2026-03-07
 
 ### Changed

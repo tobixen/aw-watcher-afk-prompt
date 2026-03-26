@@ -515,3 +515,10 @@ class AWAfkPromptState:
             if long_enough and recent_enough:
                 logger.debug(f"Found event to note: {event}")
                 yield event
+            elif long_enough and not recent_enough:
+                start_str = event.timestamp.astimezone(LOCAL_TIMEZONE).strftime("%H:%M:%S")
+                end_str = (event.timestamp + event.duration).astimezone(LOCAL_TIMEZONE).strftime("%H:%M:%S")
+                logger.warning(
+                    f"Gap at {start_str}-{end_str} ({event.duration.total_seconds():.0f}s) "
+                    f"expired from depth window without being answered"
+                )

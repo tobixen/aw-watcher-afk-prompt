@@ -289,6 +289,11 @@ def main() -> None:
                         response = prompt(event, state.state.recent_events)
                         if response is None:
                             # User cancelled - skip this one
+                            logger.info(
+                                f"Backfill dialog cancelled for gap at "
+                                f"{format_time_local(event.timestamp)}-{format_time_local(event.timestamp + event.duration)} "
+                                f"({format_duration(event.duration)})"
+                            )
                             continue
                         elif isinstance(response, tuple) and response[0] == "SPLIT_MODE":
                             activities = response[1]
@@ -311,6 +316,11 @@ def main() -> None:
                         response = prompt(event, state.state.recent_events)
                         if response is None:
                             # User cancelled
+                            logger.info(
+                                f"Dialog cancelled for gap at "
+                                f"{format_time_local(event.timestamp)}-{format_time_local(event.timestamp + event.duration)} "
+                                f"({format_duration(event.duration)})"
+                            )
                             continue
                         elif isinstance(response, tuple) and response[0] == "SPLIT_MODE":
                             # User used split mode
