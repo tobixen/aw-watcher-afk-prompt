@@ -3,7 +3,7 @@ import datetime
 
 import aw_core
 
-from aw_watcher_afk_prompt.core import AWAfkPromptState
+from aw_watcher_afk_prompt.core import AWAfkPromptState, adjust_gap_start_for_window_activity
 
 AFK = "afk"
 NOT_AFK = "not-afk"
@@ -155,3 +155,155 @@ def test_afk_exactly_at_threshold():
     assert list(state.get_unseen_afk_events(events, INF, 300)) == []
     # One second less threshold — should be detected
     assert len(list(state.get_unseen_afk_events(events, INF, 299))) == 1
+
+
+# ---------------------------------------------------------------------------
+# Helpers for window-activity gap-adjustment tests
+# ---------------------------------------------------------------------------
+
+
+def _make_window_event(start_s: int, duration_s: int) -> aw_core.Event:
+    """Create a minimal window event (app/title, no 'status' key)."""
+    timestamp = FIRST_DATE + datetime.timedelta(seconds=start_s)
+    return aw_core.Event(timestamp=timestamp, duration=duration_s, data={"app": "foot", "title": "terminal"})
+
+
+def _make_gap(start_s: int, duration_s: int) -> aw_core.Event:
+    timestamp = FIRST_DATE + datetime.timedelta(seconds=start_s)
+    return aw_core.Event(timestamp=timestamp, duration=datetime.timedelta(seconds=duration_s), data={})
+
+
+# ---------------------------------------------------------------------------
+# Tests for adjust_gap_start_for_window_activity
+# ---------------------------------------------------------------------------
+
+
+def test_adjust_gap_start_advances_when_window_activity():
+    """Gap start is advanced to the AFK event start when window events exist in [gap_start, afk_start).
+
+    Scenario:
+    - T=0-120:   not-afk (last heartbeat)
+    - T=120-240: idle countdown — window heartbeat present, but not-afk ended
+    - T=240-600: afk event in bucket  (idle timeout triggered)
+    - T=600-660: not-afk (user returns)
+
+    The gap in not-afk events is T=120 to T=600 (480 s).
+    Window activity exists at T=120 to T=240, so that period was actually active.
+    Expected: gap start advances from T=120 to T=240; duration shrinks from 480 s to 360 s.
+    """
+    afk_events = [
+        _tuple_to_event(t)
+        for t in [
+            (0, 120, NOT_AFK),
+            (240, 360, AFK),
+            (600, 60, NOT_AFK),
+        ]
+    ]
+    window_events = [_make_window_event(120, 120)]
+
+    gap = _make_gap(120, 480)
+    adjusted = adjust_gap_start_for_window_activity(gap, afk_events, window_events)
+
+    assert adjusted.timestamp == FIRST_DATE + datetime.timedelta(seconds=240)
+    assert adjusted.duration == datetime.timedelta(seconds=360)
+
+
+def test_adjust_gap_start_unchanged_no_window_activity():
+    """Gap is not changed when there are no window events (suspend/poweroff scenario)."""
+    afk_events = [
+        _tuple_to_event(t)
+        for t in [
+            (0, 120, NOT_AFK),
+            (240, 360, AFK),
+            (600, 60, NOT_AFK),
+        ]
+    ]
+    window_events: list[aw_core.Event] = []
+
+    gap = _make_gap(120, 480)
+    adjusted = adjust_gap_start_for_window_activity(gap, afk_events, window_events)
+
+    assert adjusted.timestamp == gap.timestamp
+    assert adjusted.duration == gap.duration
+
+
+def test_adjust_gap_start_unchanged_no_afk_event():
+    """Gap is not changed when no AFK event is found within the gap (no snap target)."""
+    afk_events = [
+        _tuple_to_event(t)
+        for t in [
+            (0, 120, NOT_AFK),
+            (600, 60, NOT_AFK),
+        ]
+    ]
+    window_events = [_make_window_event(120, 120)]
+
+    gap = _make_gap(120, 480)
+    adjusted = adjust_gap_start_for_window_activity(gap, afk_events, window_events)
+
+    assert adjusted.timestamp == gap.timestamp
+    assert adjusted.duration == gap.duration
+
+
+def test_adjust_gap_start_unchanged_afk_at_gap_start():
+    """Gap is not changed when afk event starts exactly at gap start (nothing to advance)."""
+    afk_events = [
+        _tuple_to_event(t)
+        for t in [
+            (0, 120, NOT_AFK),
+            (120, 480, AFK),  # afk starts exactly at gap start
+            (600, 60, NOT_AFK),
+        ]
+    ]
+    window_events = [_make_window_event(120, 30)]
+
+    gap = _make_gap(120, 480)
+    adjusted = adjust_gap_start_for_window_activity(gap, afk_events, window_events)
+
+    assert adjusted.timestamp == gap.timestamp
+    assert adjusted.duration == gap.duration
+
+
+# ---------------------------------------------------------------------------
+# Integration test: get_unseen_afk_events with window_events parameter
+# ---------------------------------------------------------------------------
+
+
+def test_get_unseen_afk_events_with_window_advances_gap_start():
+    """With window events, the detected gap start is advanced past the 2-min idle countdown."""
+    afk_events = [
+        _tuple_to_event(t)
+        for t in [
+            (0, 120, NOT_AFK),
+            (240, 360, AFK),
+            (600, 60, NOT_AFK),
+        ]
+    ]
+    window_events = [_make_window_event(120, 120)]
+
+    state = AWAfkPromptState([])
+    unseen = list(state.get_unseen_afk_events(afk_events, INF, 300, window_events))
+
+    assert len(unseen) == 1
+    assert unseen[0].timestamp == FIRST_DATE + datetime.timedelta(seconds=240)
+    assert int(unseen[0].duration.total_seconds()) == 360
+
+
+def test_get_unseen_afk_events_no_window_param_unchanged():
+    """Without window events, get_unseen_afk_events behaves as before (no regression)."""
+    afk_events = [
+        _tuple_to_event(t)
+        for t in [
+            (0, 120, NOT_AFK),
+            (240, 360, AFK),
+            (600, 60, NOT_AFK),
+        ]
+    ]
+
+    state = AWAfkPromptState([])
+    # Gap from 120-600 (480 s), threshold 300 s → should be found
+    unseen = list(state.get_unseen_afk_events(afk_events, INF, 300))
+
+    assert len(unseen) == 1
+    assert unseen[0].timestamp == FIRST_DATE + datetime.timedelta(seconds=120)
+    assert int(unseen[0].duration.total_seconds()) == 480

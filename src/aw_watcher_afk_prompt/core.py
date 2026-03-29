@@ -61,6 +61,21 @@ def find_afk_bucket(buckets: dict[str, Any]) -> str:
             raise AWAfkPromptError(f"Found too many afk buckets: {afk_buckets}.")
 
 
+def find_window_bucket(buckets: dict[str, Any]) -> str | None:
+    """Find the window watcher bucket (aw-watcher-window or aw-watcher-window-wayland).
+
+    Returns None if not found (window watcher is optional for this purpose).
+    """
+    window_buckets = [b for b in buckets if "aw-watcher-window" in b]
+    if len(window_buckets) == 0:
+        return None
+    if len(window_buckets) == 1:
+        return window_buckets[0]
+    # Multiple window buckets (e.g. Wayland + X11 co-existing) — pick the first alphabetically
+    logger.warning(f"Found multiple window buckets: {window_buckets}, using {sorted(window_buckets)[0]}")
+    return sorted(window_buckets)[0]
+
+
 def find_lid_bucket(buckets: dict[str, Any]):
     """Find the lid watcher bucket (aw-watcher-lid).
 
@@ -89,6 +104,63 @@ def squash_overlaps(events: list[aw_core.Event]) -> list[aw_core.Event]:
 
 def get_utc_now() -> datetime.datetime:
     return datetime.datetime.now().astimezone(datetime.UTC)
+
+
+def adjust_gap_start_for_window_activity(
+    gap: aw_core.Event,
+    afk_events: list[aw_core.Event],
+    window_events: list[aw_core.Event],
+) -> aw_core.Event:
+    """Advance a gap's start time to the confirmed AFK-event start when window activity exists.
+
+    During the idle-timeout countdown (typically ~2 min), the AFK watcher keeps
+    sending not-afk heartbeats but stops at the last real interaction. The gap
+    between the final not-afk heartbeat and the AFK event start can contain
+    genuine window-focus changes (e.g. reading a website, watching a video).
+
+    If window events exist in [gap_start, afk_event_start), the user was
+    demonstrably still at the computer, so we trust the idle-timeout and
+    advance the gap start to ``afk_event_start``.
+
+    If there are *no* window events in that window (suspend/poweroff), we leave
+    the gap unchanged so it still covers the full unknown period.
+
+    Parameters
+    ----------
+    gap:
+        The detected gap in not-afk events (its .data dict may be empty).
+    afk_events:
+        All events from the AFK bucket (mix of "afk" and "not-afk").
+    window_events:
+        Window-watcher events for the same time range.
+    """
+    gap_start = gap.timestamp
+    gap_end = gap.timestamp + gap.duration
+
+    # Find the earliest "afk" event whose start falls within (gap_start, gap_end).
+    afk_starts = [e.timestamp for e in afk_events if is_afk(e) and gap_start < e.timestamp < gap_end]
+    if not afk_starts:
+        return gap  # No AFK event to snap to
+
+    afk_event_start = min(afk_starts)
+
+    # Check for window activity strictly inside [gap_start, afk_event_start).
+    has_window_activity = any(
+        w.duration.total_seconds() > 0 and w.timestamp < afk_event_start and (w.timestamp + w.duration) > gap_start
+        for w in window_events
+    )
+    if not has_window_activity:
+        return gap  # Likely suspend/poweroff — leave gap unchanged
+
+    new_duration = gap_end - afk_event_start
+    if new_duration.total_seconds() <= 0:
+        return gap
+
+    logger.info(
+        f"Advancing gap start by {(afk_event_start - gap_start).total_seconds():.0f}s "
+        f"(window activity present during idle countdown)"
+    )
+    return aw_core.Event(None, afk_event_start, new_duration, gap.data)
 
 
 def get_gaps(events: list[aw_core.Event]) -> Iterator[aw_core.Event]:
@@ -208,6 +280,11 @@ class AWAfkPromptClient:
         self.state = AWAfkPromptState(recent_events, self.seen_store)
 
         self.afk_bucket_id = find_afk_bucket(self._all_buckets)
+        self.window_bucket_id = find_window_bucket(self._all_buckets)
+        if self.window_bucket_id:
+            logger.info(f"Window watcher detected: {self.window_bucket_id}")
+        else:
+            logger.info("Window watcher not found, gap-start adjustment disabled")
 
         # Check for optional lid watcher integration (aw-watcher-lid)
         # See: https://github.com/tobixen/aw-watcher-lid
@@ -395,7 +472,16 @@ class AWAfkPromptClient:
                 logger.debug("Currently AFK, waiting for user to return")
                 return
 
-        yield from self.state.get_unseen_afk_events(all_events, seconds, durration_thresh)
+        # Fetch window events for gap-start adjustment (if window watcher is present)
+        window_events: list[aw_core.Event] = []
+        if self.window_bucket_id:
+            try:
+                raw = self.client.get_events(self.window_bucket_id, limit=self.history_limit)
+                window_events = raw
+            except Exception:
+                logger.warning("Failed to fetch window events for gap-start adjustment, skipping")
+
+        yield from self.state.get_unseen_afk_events(all_events, seconds, durration_thresh, window_events)
 
 
 class AWAfkPromptState:
@@ -462,7 +548,11 @@ class AWAfkPromptState:
             logger.debug(f"Event already marked as seen: {event}")
 
     def get_unseen_afk_events(
-        self, events: list[aw_core.Event], recency_thresh: float, durration_thresh: float
+        self,
+        events: list[aw_core.Event],
+        recency_thresh: float,
+        durration_thresh: float,
+        window_events: list[aw_core.Event] | None = None,
     ) -> Iterator[aw_core.Event]:
         """Check whether we recently finished a large AFK event.
 
@@ -500,6 +590,13 @@ class AWAfkPromptState:
             logger.debug(
                 f"  Gap: {gap.timestamp.astimezone(LOCAL_TIMEZONE).strftime('%H:%M:%S')} | {gap.duration.total_seconds():.1f}s"
             )
+
+        # If window events are provided, advance each gap's start past the idle
+        # countdown when window activity was present (fixes 2-min systematic overlap).
+        if window_events:
+            pseudo_afk_events = [
+                adjust_gap_start_for_window_activity(gap, events, window_events) for gap in pseudo_afk_events
+            ]
 
         pseudo_afk_events = [e for e in pseudo_afk_events if not self.has_event(e)]
         logger.debug(f"Gaps after filtering seen: {len(pseudo_afk_events)}")
