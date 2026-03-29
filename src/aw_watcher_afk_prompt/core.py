@@ -2,6 +2,7 @@
 import datetime
 import json
 import logging
+import time
 from collections import deque
 from collections.abc import Iterable, Iterator
 from copy import deepcopy
@@ -14,6 +15,7 @@ import appdirs
 import aw_core
 import aw_transform
 from aw_client.client import ActivityWatchClient
+from requests.exceptions import ConnectionError as RequestsConnectionError
 from requests.exceptions import HTTPError
 
 from aw_watcher_afk_prompt.utils import LOCAL_TIMEZONE
@@ -27,6 +29,21 @@ except ImportError:
 
 WATCHER_NAME = "aw-watcher-afk-prompt"
 DATA_KEY = "message"
+
+_POST_MAX_RETRIES = 13  # 1 initial attempt + 12 retries × 10 s ≈ 2 minutes
+_POST_RETRY_INTERVAL = 10  # seconds between retries on transient errors
+
+
+def _is_transient_error(exc: Exception) -> bool:
+    """Return True for errors that are worth retrying (server/network glitches)."""
+    if isinstance(exc, RequestsConnectionError):
+        return True
+    if isinstance(exc, HTTPError):
+        resp = getattr(exc, "response", None)
+        return resp is not None and resp.status_code >= 500
+    return False
+
+
 """What field in the event data to store the user's message in."""
 
 
@@ -305,25 +322,29 @@ class AWAfkPromptClient:
     def post_event(self, event: aw_core.Event, message: str) -> None:
         """Post a single event with error handling.
 
+        Retries on transient server/network errors (ConnectionError, 5xx).
         Only marks the event as "seen" after successful posting to avoid data loss.
         """
-        try:
-            # Update event with message
-            event.data[DATA_KEY] = message
-            event["id"] = None  # Wipe the ID so we don't edit the AFK event
+        event.data[DATA_KEY] = message
+        event["id"] = None  # Wipe the ID so we don't edit the AFK event
 
-            # Post to ActivityWatch FIRST
-            self.client.insert_event(self.bucket_id, event)
-            logger.info(f"Successfully posted event: {message}")
-
-            # Only mark as seen AFTER successful posting
-            self.state.mark_event_as_seen(event)
-
-        except Exception as e:
-            logger.error(f"Failed to post event: {e}")
-            logger.error("Event will be queued for retry on next iteration")
-            # Don't mark as seen - event will be prompted again
-            raise
+        for attempt in range(_POST_MAX_RETRIES):
+            try:
+                self.client.insert_event(self.bucket_id, event)
+                logger.info(f"Successfully posted event: {message}")
+                self.state.mark_event_as_seen(event)
+                return
+            except Exception as e:
+                if _is_transient_error(e) and attempt < _POST_MAX_RETRIES - 1:
+                    logger.warning(
+                        f"Transient error posting event (attempt {attempt + 1}/{_POST_MAX_RETRIES}), "
+                        f"retrying in {_POST_RETRY_INTERVAL}s: {e}"
+                    )
+                    time.sleep(_POST_RETRY_INTERVAL)
+                else:
+                    logger.error(f"Failed to post event after {attempt + 1} attempt(s): {e}")
+                    # Don't mark as seen - event will be prompted again
+                    raise
 
     def post_split_events(self, original_event: aw_core.Event, activities: list):
         """Post multiple events from split mode with error handling.
@@ -343,32 +364,41 @@ class AWAfkPromptClient:
         split_id = str(original_event.timestamp.timestamp())
 
         for i, activity in enumerate(activities):
-            try:
-                # Create a new event for this activity with split metadata
-                event = aw_core.Event(
-                    timestamp=activity.start_time,
-                    duration=datetime.timedelta(minutes=activity.duration_minutes, seconds=activity.duration_seconds),
-                    data={
-                        DATA_KEY: activity.description,
-                        "split": True,
-                        "split_count": len(activities),
-                        "split_index": i,
-                        "split_id": split_id,
-                    },
-                )
+            event = aw_core.Event(
+                timestamp=activity.start_time,
+                duration=datetime.timedelta(minutes=activity.duration_minutes, seconds=activity.duration_seconds),
+                data={
+                    DATA_KEY: activity.description,
+                    "split": True,
+                    "split_count": len(activities),
+                    "split_index": i,
+                    "split_id": split_id,
+                },
+            )
 
-                # Post to ActivityWatch
-                self.client.insert_event(self.bucket_id, event)
-                logger.info(
-                    f"Posted activity {i + 1}/{len(activities)}: '{activity.description}' "
-                    f"({activity.duration_minutes}m {activity.duration_seconds}s)"
-                )
-                posted_count += 1
-
-            except Exception as e:
-                logger.error(f"Failed to post activity {i + 1}/{len(activities)}: {e}")
-                failed_count += 1
-                # Continue trying to post remaining activities
+            for attempt in range(_POST_MAX_RETRIES):
+                try:
+                    self.client.insert_event(self.bucket_id, event)
+                    logger.info(
+                        f"Posted activity {i + 1}/{len(activities)}: '{activity.description}' "
+                        f"({activity.duration_minutes}m {activity.duration_seconds}s)"
+                    )
+                    posted_count += 1
+                    break
+                except Exception as e:
+                    if _is_transient_error(e) and attempt < _POST_MAX_RETRIES - 1:
+                        logger.warning(
+                            f"Transient error posting activity {i + 1}/{len(activities)} "
+                            f"(attempt {attempt + 1}/{_POST_MAX_RETRIES}), "
+                            f"retrying in {_POST_RETRY_INTERVAL}s: {e}"
+                        )
+                        time.sleep(_POST_RETRY_INTERVAL)
+                    else:
+                        logger.error(
+                            f"Failed to post activity {i + 1}/{len(activities)} after {attempt + 1} attempt(s): {e}"
+                        )
+                        failed_count += 1
+                        break  # move on to the next activity
 
         # Only mark original event as seen if ALL activities were posted successfully
         if failed_count == 0:
