@@ -38,11 +38,12 @@ def test_get_unseen_afk_events_initial():
     ]
     init_events = [_tuple_to_event(tup) for tup in init_events_tups]
 
+    # Nothing should pass the recency threshold (gap from year 1970 is outside the 100s window).
+    # Use a fresh state — this call marks the expired gap as seen, which is correct.
+    assert list(AWAfkPromptState([]).get_unseen_afk_events(init_events, 100, 10)) == []
+
+    # With INF recency window the gap IS found. Use a fresh state (not tainted by the check above).
     state = AWAfkPromptState([])
-
-    # Nothing should pass the recency threshold.
-    assert list(state.get_unseen_afk_events(init_events, 100, 10)) == []
-
     assert [_event_to_tuple(e) for e in state.get_unseen_afk_events(init_events, INF, 10)] == [(60, 20)]
 
     # Should be excluded by the duration threshold.
@@ -307,3 +308,39 @@ def test_get_unseen_afk_events_no_window_param_unchanged():
     assert len(unseen) == 1
     assert unseen[0].timestamp == FIRST_DATE + datetime.timedelta(seconds=120)
     assert int(unseen[0].duration.total_seconds()) == 480
+
+
+def test_expired_gap_not_repeated():
+    """Gaps that expire from the depth window (too old) must be auto-marked as seen.
+
+    If they aren't, every poll cycle re-reports the same expired gap, blocking
+    any new gaps from ever being shown.
+    """
+    # Build two not-afk events with an AFK gap between them, all in the past.
+    old_start = datetime.datetime(2000, 1, 1, tzinfo=datetime.UTC)
+    events = [
+        aw_core.Event(timestamp=old_start, duration=datetime.timedelta(seconds=100), data={"status": NOT_AFK}),
+        aw_core.Event(
+            timestamp=old_start + datetime.timedelta(seconds=200),
+            duration=datetime.timedelta(seconds=100),
+            data={"status": NOT_AFK},
+        ),
+    ]
+    state = AWAfkPromptState([])
+
+    # recency_thresh=10 means the gap (ended in year 2000) is way too old to prompt.
+    # But it is long enough (100 s > 60 s duration threshold).
+    first_call = list(state.get_unseen_afk_events(events, recency_thresh=10, durration_thresh=60))
+    assert first_call == [], "expired gap should not be yielded"
+
+    # On a second call with the same data the gap must not be reported again (was a bug).
+    second_call = list(state.get_unseen_afk_events(events, recency_thresh=10, durration_thresh=60))
+    assert second_call == [], "expired gap must not be re-reported after it was already noted"
+    # Verify it was actually added to the in-memory seen set, not just silently dropped.
+    assert state.has_event(
+        aw_core.Event(
+            timestamp=old_start + datetime.timedelta(seconds=100),
+            duration=datetime.timedelta(seconds=100),
+            data={},
+        )
+    ), "expired gap should have been marked as seen"

@@ -649,3 +649,4 @@ class AWAfkPromptState:
                     f"Gap at {start_str}-{end_str} ({event.duration.total_seconds():.0f}s) "
                     f"expired from depth window without being answered"
                 )
+                self.mark_event_as_seen(event)
