@@ -29,6 +29,17 @@ def _format_duration_info(minutes: int) -> str:
     return ""
 
 
+def _minutes_to_hours_str(minutes: int) -> str:
+    """Format minutes as a decimal-hours string with 1 decimal place precision.
+
+    Used when editing in hours mode. 1-decimal resolution gives ~±3-minute
+    rounding, so values within ~3 min of a whole hour naturally snap (e.g.
+    57 min → "1", 84 min → "1.4", not "1.5").
+    """
+    hours = round(minutes / 60, 1)
+    return str(int(hours)) if hours == int(hours) else str(hours)
+
+
 @dataclass
 class ActivityLine:
     """Represents a single activity in a split AFK period.
@@ -727,25 +738,39 @@ class ActivityLineWidget:
         )
         self.start_entry.grid(row=row, column=1, padx=5, pady=2)
 
-        # Duration field (minutes only, editable)
+        self.hours_mode = False
+
+        # Duration input — minutes spinbox (default) or hours entry (toggled)
+        # Both share column 2; only one is visible at a time.
         self.duration_var = tk.IntVar(master=parent, value=activity.duration_minutes)
         self.duration_var.trace_add("write", lambda *args: self._on_duration_change())
         self.duration_spinbox = ttk.Spinbox(parent, from_=1, to=9999, width=6, textvariable=self.duration_var)
         self.duration_spinbox.grid(row=row, column=2, padx=5, pady=2)
 
+        self.hours_var = tk.StringVar(master=parent, value="")
+        self.hours_entry = ttk.Entry(parent, textvariable=self.hours_var, width=6)
+        self.hours_entry.grid(row=row, column=2, padx=5, pady=2)
+        self.hours_entry.grid_remove()  # Hidden until user toggles to hours mode
+        self.hours_entry.bind("<Return>", lambda e: self._on_hours_commit())
+        self.hours_entry.bind("<FocusOut>", lambda e: self._on_hours_commit())
+
+        # Toggle button: "h" = switch to hours mode, "m" = switch to minutes mode
+        self.mode_toggle_btn = ttk.Button(parent, text="h", width=2, command=self._toggle_unit_mode)
+        self.mode_toggle_btn.grid(row=row, column=3, padx=2, pady=2)
+
         # Friendly duration label (shows "Xh Ym" when duration >= 60 minutes)
         self.duration_info_var = tk.StringVar(master=parent, value=_format_duration_info(activity.duration_minutes))
         self.duration_info_label = ttk.Label(parent, textvariable=self.duration_info_var, width=7)
-        self.duration_info_label.grid(row=row, column=3, padx=2, pady=2, sticky=tk.W)
+        self.duration_info_label.grid(row=row, column=4, padx=2, pady=2, sticky=tk.W)
 
         # Lock checkbox — when checked, this activity is excluded from time spreading
         self.locked_var = tk.BooleanVar(master=parent, value=False)
         self.lock_check = ttk.Checkbutton(parent, variable=self.locked_var)
-        self.lock_check.grid(row=row, column=4, padx=5, pady=2)
+        self.lock_check.grid(row=row, column=5, padx=5, pady=2)
 
         # Remove button
         self.remove_btn = ttk.Button(parent, text="−", width=3, command=lambda: self.on_remove(index))
-        self.remove_btn.grid(row=row, column=5, padx=5, pady=2)
+        self.remove_btn.grid(row=row, column=6, padx=5, pady=2)
 
     def _on_desc_change(self):
         """Handle description change."""
@@ -771,6 +796,48 @@ class ActivityLineWidget:
         except tk.TclError as e:
             logger.warning(f"Invalid duration value for activity {self.index}: {e}")
 
+    def _on_hours_commit(self):
+        """Parse hours entry and push the converted minutes to the activity pipeline."""
+        raw = self.hours_var.get().strip().rstrip("h").strip()
+        try:
+            hours = float(raw)
+            minutes = round(hours * 60)
+            if minutes >= 1:
+                self.on_change(field="duration", value=minutes)
+            else:
+                self._reset_hours_display()
+        except ValueError:
+            self._reset_hours_display()
+
+    def _reset_hours_display(self):
+        """Restore hours entry to the current duration_var value."""
+        try:
+            self.hours_var.set(_minutes_to_hours_str(self.duration_var.get()))
+        except tk.TclError:
+            pass
+
+    def _toggle_unit_mode(self):
+        """Switch between minutes spinbox and decimal hours entry."""
+        if not self.hours_mode:
+            try:
+                current = self.duration_var.get()
+            except tk.TclError:
+                current = 1
+            self.hours_var.set(_minutes_to_hours_str(current))
+            self.duration_spinbox.grid_remove()
+            self.duration_info_label.grid_remove()
+            self.hours_entry.grid()
+            self.mode_toggle_btn.configure(text="m")
+            self.hours_mode = True
+            self.hours_entry.focus_set()
+        else:
+            self._on_hours_commit()
+            self.hours_entry.grid_remove()
+            self.duration_spinbox.grid()
+            self.duration_info_label.grid()
+            self.mode_toggle_btn.configure(text="h")
+            self.hours_mode = False
+
     def is_locked(self) -> bool:
         """Return True if this activity's lock checkbox is checked."""
         return self.locked_var.get()
@@ -780,6 +847,8 @@ class ActivityLineWidget:
         self.desc_entry.destroy()
         self.start_entry.destroy()
         self.duration_spinbox.destroy()
+        self.hours_entry.destroy()
+        self.mode_toggle_btn.destroy()
         self.duration_info_label.destroy()
         self.lock_check.destroy()
         self.remove_btn.destroy()
@@ -819,6 +888,8 @@ class ActivityLineWidget:
         self.start_var.set(start_str)
         self.duration_var.set(activity.duration_minutes)
         self.duration_info_var.set(_format_duration_info(activity.duration_minutes))
+        if self.hours_mode:
+            self.hours_var.set(_minutes_to_hours_str(activity.duration_minutes))
 
         # Re-add traces
         self.desc_var.trace_add("write", lambda *args: self._on_desc_change())
@@ -874,7 +945,7 @@ class SplitActivityDialog(simpledialog.Dialog):
 
         # Prompt label
         prompt_label = ttk.Label(self.master_frame, text=self.prompt, justify=tk.LEFT)
-        prompt_label.grid(row=0, column=0, columnspan=6, padx=5, pady=5, sticky=tk.W)
+        prompt_label.grid(row=0, column=0, columnspan=7, padx=5, pady=5, sticky=tk.W)
 
         # Header row
         ttk.Label(self.master_frame, text="Description", font=("TkDefaultFont", 9, "bold")).grid(
@@ -887,7 +958,7 @@ class SplitActivityDialog(simpledialog.Dialog):
             row=1, column=2, padx=5, pady=2, sticky=tk.W
         )
         ttk.Label(self.master_frame, text="Lock", font=("TkDefaultFont", 9, "bold")).grid(
-            row=1, column=4, padx=5, pady=2, sticky=tk.W
+            row=1, column=5, padx=5, pady=2, sticky=tk.W
         )
 
         # Activities will be drawn starting at row 2
@@ -937,14 +1008,25 @@ class SplitActivityDialog(simpledialog.Dialog):
         self._setup_tab_order()
 
     def _setup_tab_order(self):
-        """Bind Tab/Shift-Tab so desc fields cycle among themselves and mins fields do the same."""
+        """Bind Tab/Shift-Tab so desc fields cycle among themselves and duration fields do the same."""
         n = len(self.activity_widgets)
         if n < 2:
             return
 
-        def make_focus_handler(target):
+        def make_desc_handler(target):
             def handler(event):
-                target.focus_set()
+                target.desc_entry.focus_set()
+                return "break"
+
+            return handler
+
+        def make_duration_handler(target):
+            def handler(event):
+                # Focus whichever duration input is currently visible on the target row
+                if target.hours_mode:
+                    target.hours_entry.focus_set()
+                else:
+                    target.duration_spinbox.focus_set()
                 return "break"
 
             return handler
@@ -952,10 +1034,12 @@ class SplitActivityDialog(simpledialog.Dialog):
         for i, widget in enumerate(self.activity_widgets):
             next_w = self.activity_widgets[(i + 1) % n]
             prev_w = self.activity_widgets[(i - 1) % n]
-            widget.desc_entry.bind("<Tab>", make_focus_handler(next_w.desc_entry))
-            widget.desc_entry.bind("<ISO_Left_Tab>", make_focus_handler(prev_w.desc_entry))
-            widget.duration_spinbox.bind("<Tab>", make_focus_handler(next_w.duration_spinbox))
-            widget.duration_spinbox.bind("<ISO_Left_Tab>", make_focus_handler(prev_w.duration_spinbox))
+            widget.desc_entry.bind("<Tab>", make_desc_handler(next_w))
+            widget.desc_entry.bind("<ISO_Left_Tab>", make_desc_handler(prev_w))
+            widget.duration_spinbox.bind("<Tab>", make_duration_handler(next_w))
+            widget.duration_spinbox.bind("<ISO_Left_Tab>", make_duration_handler(prev_w))
+            widget.hours_entry.bind("<Tab>", make_duration_handler(next_w))
+            widget.hours_entry.bind("<ISO_Left_Tab>", make_duration_handler(prev_w))
 
     def on_activity_changed(self, changed_index: int, field: str, value):
         """Handle changes to any activity field.
