@@ -134,6 +134,13 @@ def main() -> None:
         help="How far back (in minutes) to look for unfilled AFK periods (default: 1440 = 24h).",
     )
     parser.add_argument(
+        "--min-active",
+        type=float,
+        default=config.get("min_active", 0.0),
+        help="Minimum minutes of not-afk activity to count as real (default: 0 = disabled). "
+        "Shorter events are ignored so brief touches don't split a long AFK period.",
+    )
+    parser.add_argument(
         "--edit",
         action="store_true",
         help="Edit mode - review and edit past entries, then exit.",
@@ -274,7 +281,9 @@ def main() -> None:
                 try:
                     backfill_events = list(
                         state.get_new_afk_events_to_note(
-                            seconds=args.backfill_depth * 60, durration_thresh=args.length * 60
+                            seconds=args.backfill_depth * 60,
+                            durration_thresh=args.length * 60,
+                            min_not_afk_duration=args.min_active * 60,
                         )
                         or []
                     )
@@ -311,7 +320,9 @@ def main() -> None:
             while True:
                 try:
                     for event in state.get_new_afk_events_to_note(
-                        seconds=args.depth * 60, durration_thresh=args.length * 60
+                        seconds=args.depth * 60,
+                        durration_thresh=args.length * 60,
+                        min_not_afk_duration=args.min_active * 60,
                     ):
                         response = prompt(event, state.state.recent_events)
                         if response is None:

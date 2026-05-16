@@ -466,7 +466,9 @@ class AWAfkPromptClient:
         logger.warning(f"Reached max limit ({max_limit}) without finding gap boundaries")
         return all_events, limit
 
-    def get_new_afk_events_to_note(self, seconds: float, durration_thresh: float) -> Iterator[aw_core.Event] | None:
+    def get_new_afk_events_to_note(
+        self, seconds: float, durration_thresh: float, min_not_afk_duration: float = 0.0
+    ) -> Iterator[aw_core.Event] | None:
         """Check whether we recently finished a large AFK event.
 
         Fetches events from both regular AFK watcher and lid watcher (if enabled),
@@ -511,7 +513,9 @@ class AWAfkPromptClient:
             except Exception:
                 logger.warning("Failed to fetch window events for gap-start adjustment, skipping")
 
-        yield from self.state.get_unseen_afk_events(all_events, seconds, durration_thresh, window_events)
+        yield from self.state.get_unseen_afk_events(
+            all_events, seconds, durration_thresh, window_events, min_not_afk_duration
+        )
 
 
 class AWAfkPromptState:
@@ -583,6 +587,7 @@ class AWAfkPromptState:
         recency_thresh: float,
         durration_thresh: float,
         window_events: list[aw_core.Event] | None = None,
+        min_not_afk_duration: float = 0.0,
     ) -> Iterator[aw_core.Event]:
         """Check whether we recently finished a large AFK event.
 
@@ -609,6 +614,13 @@ class AWAfkPromptState:
         # Use gaps in non-afk events instead of the afk-events themselves to handle when the computer
         # is suspended or powered off.
         non_afk_events = squash_overlaps([e for e in events if not is_afk(e)])
+        if min_not_afk_duration > 0:
+            filtered = [e for e in non_afk_events if e.duration.total_seconds() >= min_not_afk_duration]
+            if len(filtered) != len(non_afk_events):
+                logger.info(
+                    f"Filtered {len(non_afk_events) - len(filtered)} short not-afk events (< {min_not_afk_duration:.0f}s), merging surrounding AFK periods"
+                )
+            non_afk_events = filtered
         logger.debug(f"Non-AFK events after squash: {len(non_afk_events)}")
         for evt in non_afk_events[-3:]:  # Last 3 events
             start = evt.timestamp.astimezone(LOCAL_TIMEZONE).strftime("%H:%M:%S")

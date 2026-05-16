@@ -158,6 +158,54 @@ def test_afk_exactly_at_threshold():
     assert len(list(state.get_unseen_afk_events(events, INF, 299))) == 1
 
 
+def test_short_not_afk_merged_with_min_duration():
+    """Short not-afk events below min_not_afk_duration are ignored, merging surrounding AFK periods.
+
+    Regression scenario: three brief "laptop touches" (72s, 82s, 48s) separated a real
+    5-minute gap from a 100-minute one. Without the filter the 5-min gap was below threshold
+    after idle-countdown adjustment; the 100-min gap outlasted the depth window before the
+    user returned, so it was never prompted for in real time.
+    """
+    # Timeline (seconds from epoch 0):
+    #   0–1000  : real work (not-afk, 1000s)
+    #   1120    : AFK starts (after ~120s idle countdown)
+    #   1310–1382: brief touch 1 (72s)
+    #   1390–1472: brief touch 2 (82s)
+    #   1480–1528: brief touch 3 (48s)
+    #   1530    : long AFK begins
+    #   5130    : user returns (not-afk)
+    events: list[TupleEvent] = [
+        (0, 1000, NOT_AFK),  # real work ends at t=1000
+        (1120, 190, AFK),  # first AFK (3m10s)
+        (1310, 72, NOT_AFK),  # brief touch 1
+        (1390, 82, NOT_AFK),  # brief touch 2
+        (1480, 48, NOT_AFK),  # brief touch 3
+        (1530, 3600, AFK),  # long AFK (60 min)
+        (5130, 600, NOT_AFK),  # user returns (10 min of real work, above 120s threshold)
+    ]
+    events = [_tuple_to_event(t) for t in events]
+
+    # Without filter: the only gap between not-afk events is:
+    #   (t=1000 -> t=1310): 310s — passes 300s threshold, should yield one event
+    #   (t=1528 -> t=5130): 3602s — but wait, the three brief touches ARE non-afk,
+    #   so gaps are: 1000-1310 (310s), 1472-1480 (8s), 1528-5130 (3602s)
+    # With min_not_afk_duration=120s: brief touches (72s, 82s, 48s) are filtered,
+    # leaving non-afk at t=0 (1000s) and t=5130 (600s).
+    # Gap between them: t=1000 to t=5130 = 4130s — one merged big gap.
+    state_no_filter = AWAfkPromptState([])
+    unseen_no_filter = list(state_no_filter.get_unseen_afk_events(events, INF, 300))
+
+    state_filtered = AWAfkPromptState([])
+    unseen_filtered = list(state_filtered.get_unseen_afk_events(events, INF, 300, min_not_afk_duration=120))
+
+    # Without filter: two gaps (310s and 3602s) both above 300s threshold
+    assert len(unseen_no_filter) == 2
+
+    # With filter: one merged gap (4130s)
+    assert len(unseen_filtered) == 1
+    assert unseen_filtered[0].duration.total_seconds() > 4000
+
+
 # ---------------------------------------------------------------------------
 # Helpers for window-activity gap-adjustment tests
 # ---------------------------------------------------------------------------
