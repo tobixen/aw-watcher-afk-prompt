@@ -474,6 +474,109 @@ class TestTimeCalculatorRemoveActivity:
             TimeCalculator.remove_activity(activities, 5)
 
 
+class TestTimeCalculatorAdjustDurationSpread:
+    """Test TimeCalculator.adjust_duration_spread() method."""
+
+    def _make_activities(self, start, minutes_list: list[int]):
+        """Helper: build a sequential list of ActivityLine with given minute durations."""
+        acts = []
+        t = start
+        for m in minutes_list:
+            acts.append(ActivityLine("", t, m, 0))
+            t += timedelta(minutes=m)
+        return acts
+
+    def test_spread_increase_across_three_others(self) -> None:
+        """Increasing A by 2 minutes distributes -2 across B, C, D; last (D) absorbs rounding."""
+        start = datetime(2025, 1, 15, 14, 0, 0, tzinfo=UTC)
+        acts = self._make_activities(start, [10, 10, 10, 10])  # A B C D
+
+        result = TimeCalculator.adjust_duration_spread(acts, 0, 12)
+
+        assert result[0].duration_minutes == 12  # A increased
+        assert result[1].duration_minutes == 9  # B reduced
+        assert result[2].duration_minutes == 9  # C reduced
+        assert result[3].duration_minutes == 10  # D unchanged (rounding)
+        assert sum(a.duration_minutes for a in result) == 40
+
+    def test_spread_decrease_across_others(self) -> None:
+        """Decreasing A by 2 distributes +2 across B and C."""
+        start = datetime(2025, 1, 15, 14, 0, 0, tzinfo=UTC)
+        acts = self._make_activities(start, [10, 10, 10])  # A B C
+
+        result = TimeCalculator.adjust_duration_spread(acts, 0, 8)
+
+        assert result[0].duration_minutes == 8
+        assert sum(a.duration_minutes for a in result) == 30  # total preserved
+        assert result[1].duration_minutes + result[2].duration_minutes == 22
+
+    def test_spread_with_lock(self) -> None:
+        """Locked activities do not receive the spread."""
+        start = datetime(2025, 1, 15, 14, 0, 0, tzinfo=UTC)
+        acts = self._make_activities(start, [10, 10, 10, 10])  # A B C D
+
+        # Lock B (index 1): spread of -2 goes only to C and D
+        result = TimeCalculator.adjust_duration_spread(acts, 0, 12, locked_indices={1})
+
+        assert result[0].duration_minutes == 12  # A
+        assert result[1].duration_minutes == 10  # B locked, unchanged
+        assert result[2].duration_minutes == 9  # C reduced
+        assert result[3].duration_minutes == 9  # D reduced
+        assert sum(a.duration_minutes for a in result) == 40
+
+    def test_spread_all_others_locked_raises(self) -> None:
+        """If all other activities are locked, spread raises ValueError."""
+        start = datetime(2025, 1, 15, 14, 0, 0, tzinfo=UTC)
+        acts = self._make_activities(start, [10, 10, 10])
+
+        with pytest.raises(ValueError, match="No other unlocked"):
+            TimeCalculator.adjust_duration_spread(acts, 0, 12, locked_indices={1, 2})
+
+    def test_spread_would_make_activity_too_short_raises(self) -> None:
+        """Spread raising ValueError when a target activity would drop below 1 minute."""
+        start = datetime(2025, 1, 15, 14, 0, 0, tzinfo=UTC)
+        acts = self._make_activities(start, [10, 1, 1])  # B and C each 1 minute
+
+        with pytest.raises(ValueError, match="less than 1 minute"):
+            TimeCalculator.adjust_duration_spread(acts, 0, 14)
+
+    def test_spread_two_activities_exact(self) -> None:
+        """With two activities, the other absorbs the full delta."""
+        start = datetime(2025, 1, 15, 14, 0, 0, tzinfo=UTC)
+        acts = self._make_activities(start, [15, 15])
+
+        result = TimeCalculator.adjust_duration_spread(acts, 0, 20)
+
+        assert result[0].duration_minutes == 20
+        assert result[1].duration_minutes == 10
+        assert sum(a.duration_minutes for a in result) == 30
+
+    def test_spread_start_times_recalculated(self) -> None:
+        """Start times are recalculated correctly after spread."""
+        start = datetime(2025, 1, 15, 14, 0, 0, tzinfo=UTC)
+        acts = self._make_activities(start, [10, 10, 10])
+
+        result = TimeCalculator.adjust_duration_spread(acts, 0, 12)
+
+        assert result[0].start_time == start
+        assert result[1].start_time == start + timedelta(minutes=12)
+        assert result[2].start_time == result[1].start_time + timedelta(minutes=result[1].duration_minutes)
+
+    def test_spread_invalid_index_raises(self) -> None:
+        start = datetime(2025, 1, 15, 14, 0, 0, tzinfo=UTC)
+        acts = self._make_activities(start, [10, 10])
+
+        with pytest.raises(ValueError, match="Invalid index"):
+            TimeCalculator.adjust_duration_spread(acts, 5, 12)
+
+    def test_spread_below_one_minute_raises(self) -> None:
+        start = datetime(2025, 1, 15, 14, 0, 0, tzinfo=UTC)
+        acts = self._make_activities(start, [10, 10])
+
+        with pytest.raises(ValueError, match="Duration must be at least 1 minute"):
+            TimeCalculator.adjust_duration_spread(acts, 0, 0)
+
+
 class TestTimeCalculatorIntegration:
     """Integration tests for TimeCalculator operations."""
 

@@ -16,6 +16,15 @@ from aw_watcher_afk_prompt.widgets import EnhancedEntry
 logger = logging.getLogger(__name__)
 
 
+def _format_duration_info(minutes: int) -> str:
+    """Return friendly time string for durations >= 60 minutes, empty string otherwise."""
+    if minutes >= 60:
+        h = minutes // 60
+        m = minutes % 60
+        return f"{h}h {m}m" if m else f"{h}h"
+    return ""
+
+
 @dataclass
 class ActivityLine:
     """Represents a single activity in a split AFK period.
@@ -310,6 +319,80 @@ class TimeCalculator:
                         duration_seconds=activity.duration_seconds,
                     )
                 )
+
+        return new_activities
+
+    @staticmethod
+    def adjust_duration_spread(
+        activities: list[ActivityLine],
+        index: int,
+        new_duration_minutes: int,
+        locked_indices: set[int] | None = None,
+    ) -> list[ActivityLine]:
+        """Adjust duration of one activity, spreading the delta over other unlocked activities.
+
+        The time delta is distributed as evenly as possible across all unlocked activities
+        other than the one being changed. When the delta doesn't divide evenly, the last
+        unlocked activity in the list absorbs the rounding remainder (i.e. changes least).
+
+        Args:
+            activities: Current list of activities
+            index: Index of the activity whose duration is being changed
+            new_duration_minutes: New duration in minutes for activities[index]
+            locked_indices: Set of activity indices that must not be adjusted
+
+        Returns:
+            New list of activities with adjustments applied and start times recalculated
+
+        Raises:
+            ValueError: If index is invalid, new_duration_minutes < 1, no unlocked others
+                        exist, or spread would reduce any activity below 1 minute
+        """
+        if locked_indices is None:
+            locked_indices = set()
+
+        if not activities or index < 0 or index >= len(activities):
+            raise ValueError(f"Invalid index: {index}")
+
+        if new_duration_minutes < 1:
+            raise ValueError("Duration must be at least 1 minute")
+
+        delta = new_duration_minutes - activities[index].duration_minutes
+        if delta == 0:
+            return list(activities)
+
+        others = [i for i in range(len(activities)) if i != index and i not in locked_indices]
+        if not others:
+            raise ValueError("No other unlocked activities to distribute the time change to")
+
+        # Distribute -delta across others using floor division; last `remainder` entries get +1
+        # Python's // and % guarantee: neg_delta == base * n + remainder, remainder >= 0
+        neg_delta = -delta
+        n = len(others)
+        base = neg_delta // n
+        remainder = neg_delta % n
+
+        adjustments: dict[int, int] = {index: delta}
+        for k, other_idx in enumerate(others):
+            adjustments[other_idx] = base + (1 if k >= n - remainder else 0)
+
+        for i, activity in enumerate(activities):
+            if activity.duration_minutes + adjustments.get(i, 0) < 1:
+                raise ValueError(f"Adjustment would make activity {i + 1} less than 1 minute")
+
+        new_activities = []
+        current_start = activities[0].start_time
+        for i, activity in enumerate(activities):
+            new_min = activity.duration_minutes + adjustments.get(i, 0)
+            new_activities.append(
+                ActivityLine(
+                    description=activity.description,
+                    start_time=current_start,
+                    duration_minutes=new_min,
+                    duration_seconds=activity.duration_seconds,
+                )
+            )
+            current_start = new_activities[-1].end_time
 
         return new_activities
 
@@ -646,9 +729,19 @@ class ActivityLineWidget:
         self.duration_spinbox = ttk.Spinbox(parent, from_=1, to=9999, width=6, textvariable=self.duration_var)
         self.duration_spinbox.grid(row=row, column=2, padx=5, pady=2)
 
+        # Friendly duration label (shows "Xh Ym" when duration >= 60 minutes)
+        self.duration_info_var = tk.StringVar(master=parent, value=_format_duration_info(activity.duration_minutes))
+        self.duration_info_label = ttk.Label(parent, textvariable=self.duration_info_var, width=7)
+        self.duration_info_label.grid(row=row, column=3, padx=2, pady=2, sticky=tk.W)
+
+        # Lock checkbox — when checked, this activity is excluded from time spreading
+        self.locked_var = tk.BooleanVar(master=parent, value=False)
+        self.lock_check = ttk.Checkbutton(parent, variable=self.locked_var)
+        self.lock_check.grid(row=row, column=4, padx=5, pady=2)
+
         # Remove button
         self.remove_btn = ttk.Button(parent, text="−", width=3, command=lambda: self.on_remove(index))
-        self.remove_btn.grid(row=row, column=3, padx=5, pady=2)
+        self.remove_btn.grid(row=row, column=5, padx=5, pady=2)
 
     def _on_desc_change(self):
         """Handle description change."""
@@ -668,17 +761,23 @@ class ActivityLineWidget:
         """Handle duration change."""
         try:
             duration = self.duration_var.get()
+            self.duration_info_var.set(_format_duration_info(duration))
             logger.debug(f"Activity {self.index} duration changed to: {duration}")
-            # Notify parent about duration change
             self.on_change(field="duration", value=duration)
         except tk.TclError as e:
             logger.warning(f"Invalid duration value for activity {self.index}: {e}")
+
+    def is_locked(self) -> bool:
+        """Return True if this activity's lock checkbox is checked."""
+        return self.locked_var.get()
 
     def destroy(self):
         """Destroy all widgets in this line."""
         self.desc_entry.destroy()
         self.start_entry.destroy()
         self.duration_spinbox.destroy()
+        self.duration_info_label.destroy()
+        self.lock_check.destroy()
         self.remove_btn.destroy()
 
     def get_description(self) -> str:
@@ -715,6 +814,7 @@ class ActivityLineWidget:
         start_str = format_time_local(activity.start_time, include_seconds=is_first)
         self.start_var.set(start_str)
         self.duration_var.set(activity.duration_minutes)
+        self.duration_info_var.set(_format_duration_info(activity.duration_minutes))
 
         # Re-add traces
         self.desc_var.trace_add("write", lambda *args: self._on_desc_change())
@@ -770,7 +870,7 @@ class SplitActivityDialog(simpledialog.Dialog):
 
         # Prompt label
         prompt_label = ttk.Label(self.master_frame, text=self.prompt, justify=tk.LEFT)
-        prompt_label.grid(row=0, column=0, columnspan=5, padx=5, pady=5, sticky=tk.W)
+        prompt_label.grid(row=0, column=0, columnspan=6, padx=5, pady=5, sticky=tk.W)
 
         # Header row
         ttk.Label(self.master_frame, text="Description", font=("TkDefaultFont", 9, "bold")).grid(
@@ -781,6 +881,9 @@ class SplitActivityDialog(simpledialog.Dialog):
         )
         ttk.Label(self.master_frame, text="Mins", font=("TkDefaultFont", 9, "bold")).grid(
             row=1, column=2, padx=5, pady=2, sticky=tk.W
+        )
+        ttk.Label(self.master_frame, text="Lock", font=("TkDefaultFont", 9, "bold")).grid(
+            row=1, column=4, padx=5, pady=2, sticky=tk.W
         )
 
         # Activities will be drawn starting at row 2
@@ -827,6 +930,29 @@ class SplitActivityDialog(simpledialog.Dialog):
         self.add_btn = ttk.Button(self.master_frame, text="+", command=self.add_activity_line)
         self.add_btn.grid(row=add_row, column=0, padx=5, pady=5, sticky=tk.W)
 
+        self._setup_tab_order()
+
+    def _setup_tab_order(self):
+        """Bind Tab/Shift-Tab so desc fields cycle among themselves and mins fields do the same."""
+        n = len(self.activity_widgets)
+        if n < 2:
+            return
+
+        def make_focus_handler(target):
+            def handler(event):
+                target.focus_set()
+                return "break"
+
+            return handler
+
+        for i, widget in enumerate(self.activity_widgets):
+            next_w = self.activity_widgets[(i + 1) % n]
+            prev_w = self.activity_widgets[(i - 1) % n]
+            widget.desc_entry.bind("<Tab>", make_focus_handler(next_w.desc_entry))
+            widget.desc_entry.bind("<ISO_Left_Tab>", make_focus_handler(prev_w.desc_entry))
+            widget.duration_spinbox.bind("<Tab>", make_focus_handler(next_w.duration_spinbox))
+            widget.duration_spinbox.bind("<ISO_Left_Tab>", make_focus_handler(prev_w.duration_spinbox))
+
     def on_activity_changed(self, changed_index: int, field: str, value):
         """Handle changes to any activity field.
 
@@ -851,10 +977,11 @@ class SplitActivityDialog(simpledialog.Dialog):
                 logger.info(f"Activity {changed_index} description updated to: '{value}'")
 
             elif field == "duration":
-                # Use TimeCalculator to adjust the duration
-                logger.info(f"Activity {changed_index} duration changed to {value} minutes")
-                self.activities = TimeCalculator.adjust_duration(
-                    self.activities, index=changed_index, new_duration_minutes=value, original_end=self.afk_end
+                # Use TimeCalculator to spread the delta across unlocked activities
+                locked = {i for i, w in enumerate(self.activity_widgets) if w.is_locked()}
+                logger.info(f"Activity {changed_index} duration changed to {value} minutes (locked={locked})")
+                self.activities = TimeCalculator.adjust_duration_spread(
+                    self.activities, index=changed_index, new_duration_minutes=value, locked_indices=locked
                 )
 
                 # Log all activity durations after recalculation
