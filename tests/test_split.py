@@ -8,7 +8,33 @@ from aw_watcher_afk_prompt.split_dialog import (
     ActivityLine,
     SplitActivityData,
     TimeCalculator,
+    _format_duration_info,
 )
+
+
+class TestFormatDurationInfo:
+    def test_below_60(self) -> None:
+        assert _format_duration_info(59) == ""
+        assert _format_duration_info(0) == ""
+
+    def test_exact_hour(self) -> None:
+        assert _format_duration_info(60) == "1h"
+        assert _format_duration_info(120) == "2h"
+
+    def test_hours_and_minutes(self) -> None:
+        assert _format_duration_info(90) == "1h 30m"
+        assert _format_duration_info(23 * 60 + 59) == "23h 59m"
+
+    def test_exact_day(self) -> None:
+        assert _format_duration_info(24 * 60) == "1d"
+        assert _format_duration_info(48 * 60) == "2d"
+
+    def test_days_and_hours(self) -> None:
+        assert _format_duration_info(25 * 60) == "1d 1h"
+        assert _format_duration_info(25 * 60 + 30) == "1d 1h"  # minutes dropped
+
+    def test_multiple_days_no_hours(self) -> None:
+        assert _format_duration_info(2 * 24 * 60 + 30) == "2d"  # 30 min, no full hour
 
 
 class TestActivityLine:

@@ -18,6 +18,10 @@ logger = logging.getLogger(__name__)
 
 def _format_duration_info(minutes: int) -> str:
     """Return friendly time string for durations >= 60 minutes, empty string otherwise."""
+    if minutes >= 24 * 60:
+        d = minutes // (24 * 60)
+        h = (minutes % (24 * 60)) // 60
+        return f"{d}d {h}h" if h else f"{d}d"
     if minutes >= 60:
         h = minutes // 60
         m = minutes % 60
