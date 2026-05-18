@@ -411,7 +411,12 @@ class AWAfkPromptClient:
             )
             # Don't mark as seen - user will be prompted again
 
-    def _fetch_events_with_dynamic_limit(self, initial_limit: int = 10, max_limit: int = 1000):
+    def _fetch_events_with_dynamic_limit(
+        self,
+        initial_limit: int = 10,
+        max_limit: int = 1000,
+        start_time: datetime.datetime | None = None,
+    ):
         """Fetch events with dynamic limit scaling.
 
         If we only get AFK heartbeats without any non-afk events to mark the
@@ -419,9 +424,33 @@ class AWAfkPromptClient:
         automatically doubles the limit until we find at least one non-afk event
         or hit the max limit.
 
+        When start_time is provided (backfill mode), fetches all events since that
+        time using a large limit, bypassing the incremental doubling. This prevents
+        stale events from an inactive watcher (e.g. lid watcher that stopped months
+        ago) from polluting the event set and hiding real gaps.
+
         Returns:
             Tuple of (all_events, limit_used)
         """
+        if start_time is not None:
+            # Time-bounded fetch: use start_time to exclude stale events from inactive
+            # buckets (e.g. a lid watcher that has been inactive for months). Use a large
+            # limit — ActivityWatch merges heartbeats so event counts are manageable.
+            fetch_limit = max(max_limit * 20, 2000)
+            afk_events = self.client.get_events(self.afk_bucket_id, limit=fetch_limit, start=start_time)
+            lid_events = []
+            if self.lid_bucket_id:
+                try:
+                    lid_events = self.client.get_events(self.lid_bucket_id, limit=fetch_limit, start=start_time)
+                except HTTPError:
+                    logger.warning("Failed to get lid events, continuing with AFK events only")
+            all_events = aw_transform.sort_by_timestamp(afk_events + lid_events)
+            logger.debug(
+                f"Time-bounded fetch: {len(all_events)} events since "
+                f"{start_time.astimezone(LOCAL_TIMEZONE).strftime('%Y-%m-%d %H:%M')}"
+            )
+            return all_events, fetch_limit
+
         limit = initial_limit
 
         while limit <= max_limit:
@@ -467,7 +496,11 @@ class AWAfkPromptClient:
         return all_events, limit
 
     def get_new_afk_events_to_note(
-        self, seconds: float, durration_thresh: float, min_not_afk_duration: float = 0.0
+        self,
+        seconds: float,
+        durration_thresh: float,
+        min_not_afk_duration: float = 0.0,
+        start_time: datetime.datetime | None = None,
     ) -> Iterator[aw_core.Event] | None:
         """Check whether we recently finished a large AFK event.
 
@@ -485,10 +518,12 @@ class AWAfkPromptClient:
         durration_thresh : float
             The number of seconds you need to be away before reporting on it.
         """
-        # Fetch events with dynamic limit scaling
+        # Fetch events with dynamic limit scaling (or time-bounded for backfill).
         # Connection errors (HTTPError, ConnectionError) are intentionally NOT caught here
         # so the caller can track server downtime and notify the user.
-        all_events, limit_used = self._fetch_events_with_dynamic_limit(initial_limit=10, max_limit=self.history_limit)
+        all_events, limit_used = self._fetch_events_with_dynamic_limit(
+            initial_limit=10, max_limit=self.history_limit, start_time=start_time
+        )
 
         # Check if currently AFK (from either source)
         # Most recent event is LAST after sorting (ascending order)
@@ -615,7 +650,16 @@ class AWAfkPromptState:
         # is suspended or powered off.
         non_afk_events = squash_overlaps([e for e in events if not is_afk(e)])
         if min_not_afk_duration > 0:
-            filtered = [e for e in non_afk_events if e.duration.total_seconds() >= min_not_afk_duration]
+            # Always preserve the most recent not-afk event as the right boundary for gap
+            # detection. If the user just returned (e.g. after boot/resume), the ongoing
+            # not-afk event may still be very short, but it IS the "back at keyboard" signal
+            # and must not be filtered out.
+            last_idx = len(non_afk_events) - 1
+            filtered = [
+                e
+                for i, e in enumerate(non_afk_events)
+                if e.duration.total_seconds() >= min_not_afk_duration or i == last_idx
+            ]
             if len(filtered) != len(non_afk_events):
                 logger.info(
                     f"Filtered {len(non_afk_events) - len(filtered)} short not-afk events (< {min_not_afk_duration:.0f}s), merging surrounding AFK periods"

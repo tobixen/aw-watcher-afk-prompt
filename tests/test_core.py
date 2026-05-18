@@ -392,3 +392,101 @@ def test_expired_gap_not_repeated():
             data={},
         )
     ), "expired gap should have been marked as seen"
+
+
+def test_min_active_preserves_most_recent_as_right_boundary():
+    """The most recent not-afk event is kept even when shorter than min_not_afk_duration.
+
+    Models the boot/resume scenario: the watcher just started, the first not-afk
+    event is only 2 s old (below min_active=90s), but the preceding boot gap (60 min)
+    must still be detected — the short event is the right boundary, not a "brief touch".
+
+    Regression: without this fix, the 2s event was filtered, leaving no right boundary,
+    so no gap between the last pre-boot activity and the current session was detected.
+    """
+    now = datetime.datetime.now().astimezone(datetime.UTC)
+    events = [
+        # Long activity 70 minutes ago (survives min_active filter)
+        aw_core.Event(
+            timestamp=now - datetime.timedelta(minutes=75),
+            duration=datetime.timedelta(minutes=5),
+            data={"status": NOT_AFK},
+        ),
+        # 60-minute gap here (the boot/suspend period)
+        # Very short return event: 2s, shorter than min_active=90s
+        aw_core.Event(
+            timestamp=now - datetime.timedelta(seconds=2),
+            duration=datetime.timedelta(seconds=2),
+            data={"status": NOT_AFK},
+        ),
+    ]
+
+    state = AWAfkPromptState([])
+    unseen_no_filter = list(state.get_unseen_afk_events(events, INF, 300))
+    assert len(unseen_no_filter) == 1, "sanity check: gap detected without filter"
+
+    state2 = AWAfkPromptState([])
+    unseen_filtered = list(state2.get_unseen_afk_events(events, INF, 300, min_not_afk_duration=90))
+    assert len(unseen_filtered) == 1, "boot gap must be detected even when return event is shorter than min_active"
+    assert unseen_filtered[0].duration.total_seconds() > 60 * 60 - 30
+
+
+def test_stale_events_dont_suppress_boot_gap_via_right_boundary():
+    """Stale events mixed in from an inactive bucket don't hide the real boot gap.
+
+    Models the aw-watcher-lid scenario: the lid watcher has been inactive for months.
+    With min_active=90s, all recent post-boot events (83s each) are filtered,
+    leaving only stale events. Without the fix, only stale events generate gaps.
+    The real boot gap needs the 2s return event preserved as the right boundary.
+
+    Uses a 24h recency window: stale events (100d old) produce gaps that end
+    100d ago (excluded), while the boot gap ends at now-2s (included).
+    """
+    now = datetime.datetime.now().astimezone(datetime.UTC)
+    months_ago = now - datetime.timedelta(days=100)
+
+    events = [
+        # One stale not-afk event from 100 days ago (survives min_active, but gap ends outside 24h)
+        aw_core.Event(
+            timestamp=months_ago,
+            duration=datetime.timedelta(minutes=30),
+            data={"status": NOT_AFK},
+        ),
+        # Long pre-boot activity from 70 min ago (survives min_active, left boundary)
+        aw_core.Event(
+            timestamp=now - datetime.timedelta(minutes=75),
+            duration=datetime.timedelta(minutes=5),
+            data={"status": NOT_AFK},
+        ),
+        # Recent post-boot events: all 83s, below min_active=90s.
+        # They have 7s gaps between them (matching real aw-watcher-afk heartbeat pattern)
+        # so period_union does NOT merge them into a single longer event.
+        aw_core.Event(
+            timestamp=now - datetime.timedelta(seconds=180),
+            duration=datetime.timedelta(seconds=83),
+            data={"status": NOT_AFK},
+        ),
+        aw_core.Event(
+            timestamp=now - datetime.timedelta(seconds=90),
+            duration=datetime.timedelta(seconds=83),
+            data={"status": NOT_AFK},
+        ),
+        # The ongoing return event: 2s (right boundary, must be preserved)
+        aw_core.Event(
+            timestamp=now - datetime.timedelta(seconds=2),
+            duration=datetime.timedelta(seconds=2),
+            data={"status": NOT_AFK},
+        ),
+    ]
+
+    # Use a 60-min recency window: the stale-to-preboot gap ends at now-75min which is
+    # outside the 60-min window (expires), but the boot gap ends at now-2s (inside).
+    recency_60min = 60 * 60
+
+    state = AWAfkPromptState([])
+    # With min_active=90s and 60-min recency: only the boot gap (70 min) should be found.
+    # Without the fix, 2s event is filtered → no right boundary → boot gap not detected.
+    unseen = list(state.get_unseen_afk_events(events, recency_60min, 300, min_not_afk_duration=90))
+
+    boot_gaps = [e for e in unseen if e.duration.total_seconds() > 50 * 60]
+    assert len(boot_gaps) == 1, "boot gap (~70 min) must be detected — stale events must not suppress it"

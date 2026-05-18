@@ -279,11 +279,15 @@ def main() -> None:
             if args.backfill:
                 logger.info(f"Backfill mode enabled, looking back {args.backfill_depth} minutes")
                 try:
+                    from datetime import UTC, datetime, timedelta
+
+                    backfill_start = datetime.now(UTC) - timedelta(seconds=args.backfill_depth * 60)
                     backfill_events = list(
                         state.get_new_afk_events_to_note(
                             seconds=args.backfill_depth * 60,
                             durration_thresh=args.length * 60,
                             min_not_afk_duration=args.min_active * 60,
+                            start_time=backfill_start,
                         )
                         or []
                     )
