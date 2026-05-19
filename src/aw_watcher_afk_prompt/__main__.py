@@ -137,7 +137,7 @@ def main() -> None:
         "--min-active",
         type=float,
         default=config.get("min_active", 0.0),
-        help="Minimum minutes of not-afk activity to count as real (default: 0 = disabled). "
+        help="Minimum seconds of not-afk activity to count as real (default: 0 = disabled). "
         "Shorter events are ignored so brief touches don't split a long AFK period.",
     )
     parser.add_argument(
@@ -286,7 +286,7 @@ def main() -> None:
                         state.get_new_afk_events_to_note(
                             seconds=args.backfill_depth * 60,
                             durration_thresh=args.length * 60,
-                            min_not_afk_duration=args.min_active * 60,
+                            min_not_afk_duration=args.min_active,
                             start_time=backfill_start,
                         )
                         or []
@@ -326,7 +326,7 @@ def main() -> None:
                     for event in state.get_new_afk_events_to_note(
                         seconds=args.depth * 60,
                         durration_thresh=args.length * 60,
-                        min_not_afk_duration=args.min_active * 60,
+                        min_not_afk_duration=args.min_active,
                     ):
                         response = prompt(event, state.state.recent_events)
                         if response is None:

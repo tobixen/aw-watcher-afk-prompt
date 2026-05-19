@@ -30,11 +30,11 @@ enable_backfill = true
 # Default: 1440 (24 hours)
 backfill_depth = 1440
 
-# Minimum duration (in minutes) for a not-afk event to count as "real" activity.
+# Minimum duration (in seconds) for a not-afk event to count as "real" activity.
 # Not-afk events shorter than this are ignored, so brief laptop touches don't
 # split a long AFK period into smaller ones that fall below the threshold.
-# Default: 0.0 (disabled). Recommended: 2.0 (120s, matching the idle countdown).
-min_active = 0.0
+# Default: 0 (disabled).
+min_active = 0
 """.strip()
 
 
