@@ -661,7 +661,7 @@ class AWAfkPromptState:
                 if e.duration.total_seconds() >= min_not_afk_duration or i == last_idx
             ]
             if len(filtered) != len(non_afk_events):
-                logger.info(
+                logger.debug(
                     f"Filtered {len(non_afk_events) - len(filtered)} short not-afk events (< {min_not_afk_duration:.0f}s), merging surrounding AFK periods"
                 )
             non_afk_events = filtered
