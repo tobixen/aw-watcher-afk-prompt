@@ -22,7 +22,7 @@ from aw_watcher_afk_prompt.core import (
 from aw_watcher_afk_prompt.utils import format_duration, format_time_local
 
 
-def prompt(event: aw_core.Event, recent_events: Iterable[aw_core.Event]) -> str | None:
+def prompt(event: aw_core.Event, recent_events: Iterable[aw_core.Event], queue_info: dict | None = None) -> str | None:
     # TODO: Allow for customizing the prompt from the prompt interface.
     start_time_str = format_time_local(event.timestamp)
     end_time_str = format_time_local(event.timestamp + event.duration)
@@ -36,7 +36,25 @@ def prompt(event: aw_core.Event, recent_events: Iterable[aw_core.Event]) -> str 
         [event.data.get(DATA_KEY, "") for event in recent_events],
         afk_start=event.timestamp,
         afk_duration_seconds=event.duration.total_seconds(),
+        queue_info=queue_info,
     )
+
+
+def _build_queue_info(events: list[aw_core.Event], index: int) -> dict | None:
+    """Build queue info dict for the dialog when multiple AFK intervals are pending."""
+    if len(events) <= 1:
+        return None
+    next_event = events[index + 1] if index + 1 < len(events) else None
+    next_str = None
+    if next_event:
+        start = format_time_local(next_event.timestamp)
+        end = format_time_local(next_event.timestamp + next_event.duration)
+        next_str = f"{start}–{end} ({format_duration(next_event.duration)})"
+    return {
+        "position": index + 1,
+        "total": len(events),
+        "next_str": next_str,
+    }
 
 
 def parse_date(date_str: str):
@@ -298,8 +316,8 @@ def main() -> None:
                 backfill_events.sort(key=lambda e: e.timestamp)
                 if backfill_events:
                     logger.info(f"Found {len(backfill_events)} unfilled AFK periods to backfill")
-                    for event in backfill_events:
-                        response = prompt(event, state.state.recent_events)
+                    for i, event in enumerate(backfill_events):
+                        response = prompt(event, state.state.recent_events, queue_info=_build_queue_info(backfill_events, i))
                         if response is None:
                             # User cancelled - skip this one
                             logger.info(
@@ -323,14 +341,15 @@ def main() -> None:
             server_down_notified = False
             while True:
                 try:
-                    for event in state.get_new_afk_events_to_note(
+                    pending = list(state.get_new_afk_events_to_note(
                         seconds=args.depth * 60,
                         durration_thresh=args.length * 60,
                         min_not_afk_duration=args.min_active,
-                    ):
-                        response = prompt(event, state.state.recent_events)
+                    ))
+                    for i, event in enumerate(pending):
+                        response = prompt(event, state.state.recent_events, queue_info=_build_queue_info(pending, i))
                         if response is None:
-                            # User cancelled
+                            # User cancelled/snoozed
                             logger.info(
                                 f"Dialog cancelled for gap at "
                                 f"{format_time_local(event.timestamp)}-{format_time_local(event.timestamp + event.duration)} "

@@ -177,13 +177,14 @@ abbreviations = _AbbreviationStore()
 # TODO: This widget pops up off-center when using multiple screes on Linux, possibly other platforms.
 # See https://stackoverflow.com/questions/30312875/tkinter-winfo-screenwidth-when-used-with-dual-monitors/57866046#57866046
 class AWAfkPromptDialog(simpledialog.Dialog):
-    def __init__(self, title: str, prompt: str, history: list[str], afk_start=None, afk_duration_seconds=None) -> None:
+    def __init__(self, title: str, prompt: str, history: list[str], afk_start=None, afk_duration_seconds=None, queue_info: dict | None = None) -> None:
         self.prompt = prompt
         self.history = history
         self.history_index = len(history)
         self.afk_start = afk_start
         self.afk_duration_seconds = afk_duration_seconds
         self.split_mode = False  # Track if user wants split mode
+        self.queue_info = queue_info  # dict with 'position', 'total', 'next_str' keys
         super().__init__(root, title)
 
     # @override (when we get to 3.12)
@@ -232,6 +233,21 @@ class AWAfkPromptDialog(simpledialog.Dialog):
         self.entry.bind("<Control-N>", lambda e: self.save_new_abbreviation(e, long=True))
 
         self.bind("<Control-comma>", self.open_config)
+
+        # Queue info label: shown when multiple AFK intervals are pending
+        if self.queue_info:
+            pos = self.queue_info["position"]
+            total = self.queue_info["total"]
+            next_str = self.queue_info.get("next_str")
+            if next_str:
+                queue_text = f"({pos} of {total}) — next: {next_str}"
+            else:
+                queue_text = f"({pos} of {total}) — last interval"
+            queue_label = ttk.Label(master, text=queue_text, foreground="gray", justify=tk.LEFT)
+            queue_label.grid(row=2, padx=5, sticky=tk.W, columnspan=2)
+
+        # Auto-snooze after 2 minutes if the dialog is ignored
+        self._timeout_id = self.after(120_000, self.cancel_with_snooze)
 
         return self.entry
 
@@ -320,17 +336,15 @@ class AWAfkPromptDialog(simpledialog.Dialog):
         self.entry.delete(0, cursor)
         self.entry.insert(0, "")
 
-    # If you want to retrieve the entered text when the dialog closes:
+    def validate(self):
+        if not self.entry.get().strip():
+            # Empty Enter = snooze (same as Cancel)
+            self.after(0, self.cancel_with_snooze)
+            return False
+        return True
+
     def apply(self):
-        text = self.entry.get().strip()
-        if not text:
-            # Don't accept blank entries - show error and keep dialog open
-            messagebox.showerror(
-                "Empty Entry",
-                "Please enter a description of what you were doing, or click 'Unknown' to mark as unknown.",
-            )
-            return  # Don't close dialog
-        self.result = text
+        self.result = self.entry.get().strip()
 
     def submit_unknown(self, event=None):  # noqa: ARG002
         """Quick dismiss as UNKNOWN."""
@@ -343,19 +357,26 @@ class AWAfkPromptDialog(simpledialog.Dialog):
     def cancel(self, event=None):  # noqa: ARG002
         # Call withdraw first because it is faster.
         # The process should wait on the destroy instead of the human.
+        if hasattr(self, "_timeout_id"):
+            self.after_cancel(self._timeout_id)
+            del self._timeout_id
         self.withdraw()
         self.destroy()
 
     def cancel_with_snooze(self, event=None):  # noqa: ARG002
-        """Cancel button handler - closes dialog and waits 60 seconds."""
+        """Cancel/timeout handler - closes dialog and waits 5 minutes before re-prompting."""
+        if getattr(self, "_snoozing", False):
+            return
+        self._snoozing = True
         self.cancel()
-        # Wait a minute so we do not spam the user with the prompt again in like 5 seconds.
-        # TODO: Make this configurable in the settings dialog.
-        time.sleep(60)
+        time.sleep(300)
 
     def switch_to_split_mode(self):
         """Switch to split mode (close this dialog and open split dialog)."""
         self.split_mode = True
+        if hasattr(self, "_timeout_id"):
+            self.after_cancel(self._timeout_id)
+            del self._timeout_id
         self.destroy()
 
     # @override (when we get to 3.12)
@@ -503,6 +524,7 @@ def ask_string(
     afk_start=None,
     afk_duration_seconds=None,
     initial_value: str | None = None,
+    queue_info: dict | None = None,
 ) -> str | None | tuple:
     """Ask for a string input, with optional split mode support.
 
@@ -522,7 +544,7 @@ def ask_string(
     # Loop to handle switching between single and split modes
     initial_text = initial_value
     while True:
-        d = AWAfkPromptDialog(title, prompt, history, afk_start, afk_duration_seconds)
+        d = AWAfkPromptDialog(title, prompt, history, afk_start, afk_duration_seconds, queue_info=queue_info)
 
         # Pre-fill with initial value or text from split mode
         if initial_text:
