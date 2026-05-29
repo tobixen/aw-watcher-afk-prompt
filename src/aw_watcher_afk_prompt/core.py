@@ -51,7 +51,6 @@ class AWAfkPromptError(Exception):
     pass
 
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
@@ -173,10 +172,12 @@ def adjust_gap_start_for_window_activity(
     if new_duration.total_seconds() <= 0:
         return gap
 
-    logger.info(
-        f"Advancing gap start by {(afk_event_start - gap_start).total_seconds():.0f}s "
-        f"(window activity present during idle countdown)"
-    )
+    advance_seconds = (afk_event_start - gap_start).total_seconds()
+    if advance_seconds > 0:
+        logger.info(
+            f"Advancing gap start by {advance_seconds:.0f}s "
+            f"(window activity present during idle countdown)"
+        )
     return aw_core.Event(None, afk_event_start, new_duration, gap.data)
 
 

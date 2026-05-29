@@ -169,6 +169,11 @@ def main() -> None:
         default="today",
         help="Date to edit entries for (default: today). Format: YYYY-MM-DD or 'today', 'yesterday'.",
     )
+    parser.add_argument(
+        "--backfill-only",
+        action="store_true",
+        help="Run backfill for unfilled AFK periods, then exit (do not start polling loop).",
+    )
     args = parser.parse_args()
 
     # Set up logging
@@ -335,6 +340,10 @@ def main() -> None:
                             state.post_event(event, response)
                 else:
                     logger.info("No unfilled AFK periods found for backfill")
+
+            if args.backfill_only:
+                logger.info("--backfill-only: exiting after backfill")
+                return
 
             # Normal operation loop
             server_down_since = None
