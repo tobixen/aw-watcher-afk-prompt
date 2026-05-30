@@ -1062,19 +1062,19 @@ class SplitActivityDialog(simpledialog.Dialog):
                     duration_minutes=activity.duration_minutes,
                     duration_seconds=activity.duration_seconds,
                 )
-                logger.info(f"Activity {changed_index} description updated to: '{value}'")
+                logger.debug(f"Activity {changed_index} description updated to: '{value}'")
 
             elif field == "duration":
                 # Use TimeCalculator to spread the delta across unlocked activities
                 locked = {i for i, w in enumerate(self.activity_widgets) if w.is_locked()}
-                logger.info(f"Activity {changed_index} duration changed to {value} minutes (locked={locked})")
+                logger.debug(f"Activity {changed_index} duration changed to {value} minutes (locked={locked})")
                 self.activities = TimeCalculator.adjust_duration_spread(
                     self.activities, index=changed_index, new_duration_minutes=value, locked_indices=locked
                 )
 
                 # Log all activity durations after recalculation
                 for i, activity in enumerate(self.activities):
-                    logger.info(
+                    logger.debug(
                         f"  Activity {i}: '{activity.description}' - "
                         f"{activity.start_time.strftime('%H:%M:%S')} - "
                         f"{activity.duration_minutes}m {activity.duration_seconds}s"
@@ -1114,7 +1114,7 @@ class SplitActivityDialog(simpledialog.Dialog):
                         hour=hours, minute=minutes, second=0, microsecond=0
                     )
 
-                    logger.info(f"Activity {changed_index} start time changed to {new_start.strftime('%H:%M')}")
+                    logger.debug(f"Activity {changed_index} start time changed to {new_start.strftime('%H:%M')}")
 
                     # Use TimeCalculator to adjust the start time
                     self.activities = TimeCalculator.adjust_start_time(
@@ -1123,7 +1123,7 @@ class SplitActivityDialog(simpledialog.Dialog):
 
                     # Log all activities after recalculation
                     for i, activity in enumerate(self.activities):
-                        logger.info(
+                        logger.debug(
                             f"  Activity {i}: '{activity.description}' - "
                             f"{activity.start_time.strftime('%H:%M:%S')} - "
                             f"{activity.duration_minutes}m {activity.duration_seconds}s"

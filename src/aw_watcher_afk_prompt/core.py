@@ -563,6 +563,10 @@ class AWAfkPromptState:
 
         Sorted from earliest to most recent."""
         self.seen_store = seen_store
+        # Gaps that fell outside the depth window before the user answered them.
+        # Kept in memory so they are re-presented the next time the user is at the
+        # keyboard, rather than being silently discarded.
+        self._deferred: list[aw_core.Event] = []
 
     def has_event(self, new: aw_core.Event, overlap_thresh: float = 0.95) -> bool:
         """Check whether we have already posted an event that overlaps with the new event.
@@ -687,8 +691,20 @@ class AWAfkPromptState:
 
         pseudo_afk_events = [e for e in pseudo_afk_events if not self.has_event(e)]
         logger.debug(f"Gaps after filtering seen: {len(pseudo_afk_events)}")
+
+        # Re-present any gaps that previously expired from the depth window but were
+        # never answered.  Purge ones that have since been answered (has_event → True).
+        self._deferred = [g for g in self._deferred if not self.has_event(g)]
+        if self._deferred:
+            logger.info(f"Re-presenting {len(self._deferred)} deferred gap(s) that expired from depth window")
+        deferred_timestamps = {g.timestamp for g in self._deferred}
+        for gap in self._deferred:
+            yield gap
+
         buffered_now = get_utc_now() - datetime.timedelta(seconds=recency_thresh)
         for event in pseudo_afk_events:
+            if event.timestamp in deferred_timestamps:
+                continue  # already yielded via deferred path above
             long_enough = event.duration.total_seconds() > durration_thresh
             recent_enough = event.timestamp + event.duration > buffered_now
             logger.debug(
@@ -704,6 +720,6 @@ class AWAfkPromptState:
                 end_str = (event.timestamp + event.duration).astimezone(LOCAL_TIMEZONE).strftime("%H:%M:%S")
                 logger.warning(
                     f"Gap at {start_str}-{end_str} ({event.duration.total_seconds():.0f}s) "
-                    f"expired from depth window without being answered"
+                    f"expired from depth window, deferring until answered"
                 )
-                self.mark_event_as_seen(event)
+                self._deferred.append(event)

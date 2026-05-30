@@ -358,13 +358,13 @@ def test_get_unseen_afk_events_no_window_param_unchanged():
     assert int(unseen[0].duration.total_seconds()) == 480
 
 
-def test_expired_gap_not_repeated():
-    """Gaps that expire from the depth window (too old) must be auto-marked as seen.
+def test_expired_gap_is_deferred_and_re_presented():
+    """Gaps that fall outside the depth window are deferred, not discarded.
 
-    If they aren't, every poll cycle re-reports the same expired gap, blocking
-    any new gaps from ever being shown.
+    First poll: gap is too old → not yielded yet, added to _deferred.
+    Second poll: gap is yielded from _deferred so the user gets a chance to answer.
+    After mark_event_as_seen: gap is no longer re-presented.
     """
-    # Build two not-afk events with an AFK gap between them, all in the past.
     old_start = datetime.datetime(2000, 1, 1, tzinfo=datetime.UTC)
     events = [
         aw_core.Event(timestamp=old_start, duration=datetime.timedelta(seconds=100), data={"status": NOT_AFK}),
@@ -376,22 +376,20 @@ def test_expired_gap_not_repeated():
     ]
     state = AWAfkPromptState([])
 
-    # recency_thresh=10 means the gap (ended in year 2000) is way too old to prompt.
-    # But it is long enough (100 s > 60 s duration threshold).
+    # First call: gap is beyond recency_thresh → deferred, not yet yielded
     first_call = list(state.get_unseen_afk_events(events, recency_thresh=10, durration_thresh=60))
-    assert first_call == [], "expired gap should not be yielded"
+    assert first_call == [], "expired gap should not be yielded on first detection"
+    assert len(state._deferred) == 1, "expired gap should be added to _deferred"
 
-    # On a second call with the same data the gap must not be reported again (was a bug).
+    # Second call: deferred gap is re-presented so the user can answer it
     second_call = list(state.get_unseen_afk_events(events, recency_thresh=10, durration_thresh=60))
-    assert second_call == [], "expired gap must not be re-reported after it was already noted"
-    # Verify it was actually added to the in-memory seen set, not just silently dropped.
-    assert state.has_event(
-        aw_core.Event(
-            timestamp=old_start + datetime.timedelta(seconds=100),
-            duration=datetime.timedelta(seconds=100),
-            data={},
-        )
-    ), "expired gap should have been marked as seen"
+    assert len(second_call) == 1, "deferred gap should be re-presented on next poll"
+
+    # Once answered (marked seen), it should not appear again
+    state.mark_event_as_seen(second_call[0])
+    third_call = list(state.get_unseen_afk_events(events, recency_thresh=10, durration_thresh=60))
+    assert third_call == [], "answered gap should not be re-presented"
+    assert state._deferred == [], "_deferred should be empty after gap is answered"
 
 
 def test_min_active_preserves_most_recent_as_right_boundary():
