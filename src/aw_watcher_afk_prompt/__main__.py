@@ -288,9 +288,12 @@ def main() -> None:
 
         return
 
+    # backfill-only uses a distinct client name to avoid the single-instance lock
+    # when the daemon is already running.
+    effective_client_name = WATCHER_NAME + "_backfill" if args.backfill_only else WATCHER_NAME
     try:
         client = ActivityWatchClient(  # pyright: ignore[reportPrivateImportUsage]
-            client_name=WATCHER_NAME, testing=args.testing
+            client_name=effective_client_name, testing=args.testing
         )
         with client:
             state = get_state_retries(
