@@ -48,6 +48,64 @@ def prompt(event: aw_core.Event, recent_events: Iterable[aw_core.Event], queue_i
     )
 
 
+# How often (seconds) the normal loop performs a full deep (backfill-depth) scan
+# in addition to the shallow real-time scan, so periods that slipped out of the
+# shallow window are picked up without waiting for a restart.
+DEEP_SCAN_INTERVAL_SECONDS = 600  # ~10 minutes
+
+
+def _deep_scan(state: AWAfkPromptClient, args) -> list[aw_core.Event]:
+    """Run the full backfill-depth (e.g. 24h) lookup and return unfilled AFK periods.
+
+    Uses a time-bounded fetch (``start_time``) so stale events from inactive
+    buckets don't hide real gaps. Raises ConnectionError/HTTPError on server
+    trouble so the caller can decide how to react.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    backfill_start = datetime.now(UTC) - timedelta(seconds=args.backfill_depth * 60)
+    return list(
+        state.get_new_afk_events_to_note(
+            seconds=args.backfill_depth * 60,
+            durration_thresh=args.length * 60,
+            min_not_afk_duration=args.min_active,
+            start_time=backfill_start,
+        )
+        or []
+    )
+
+
+def _process_events(state: AWAfkPromptClient, events: list[aw_core.Event], *, context: str) -> None:
+    """Prompt the user for each unfilled AFK period, oldest first.
+
+    Each prompt carries queue info ("(N of total) — next: …") so the user can see
+    how many more periods remain to be backfilled. Cancelled prompts are skipped,
+    split responses are posted as multiple activities, and normal responses are
+    posted as a single event.
+    """
+    events = sorted(events, key=lambda e: e.timestamp)
+    if not events:
+        return
+    logger.info(f"{context}: {len(events)} unfilled AFK period(s) to prompt")
+    for i, event in enumerate(events):
+        response = prompt(event, state.state.recent_events, queue_info=_build_queue_info(events, i))
+        if response is None:
+            # User cancelled/snoozed
+            logger.info(
+                f"Dialog cancelled for gap at "
+                f"{format_time_local(event.timestamp)}-{format_time_local(event.timestamp + event.duration)} "
+                f"({format_duration(event.duration)})"
+            )
+            continue
+        elif isinstance(response, tuple) and response[0] == "SPLIT_MODE":
+            activities = response[1]
+            logger.info(f"Posting {len(activities)} split activities")
+            state.post_split_events(event, activities)
+        else:
+            logger.info(response)
+            state.post_event(event, response)
+
+
 def _build_queue_info(events: list[aw_core.Event], index: int) -> dict | None:
     """Build queue info dict for the dialog when multiple AFK intervals are pending."""
     if len(events) <= 1:
@@ -309,48 +367,19 @@ def main() -> None:
             )
             logger.info("Successfully connected to the server.")
 
-            # Backfill mode: on startup, prompt for old unfilled AFK periods
+            # Backfill mode: on startup, prompt for old unfilled AFK periods.
+            # last_deep_scan tracks when we last did a full backfill-depth lookup so the
+            # normal loop can repeat it periodically (see DEEP_SCAN_INTERVAL_SECONDS).
+            last_deep_scan = 0.0
             if args.backfill:
                 logger.info(f"Backfill mode enabled, looking back {args.backfill_depth} minutes")
                 try:
-                    from datetime import UTC, datetime, timedelta
-
-                    backfill_start = datetime.now(UTC) - timedelta(seconds=args.backfill_depth * 60)
-                    backfill_events = list(
-                        state.get_new_afk_events_to_note(
-                            seconds=args.backfill_depth * 60,
-                            durration_thresh=args.length * 60,
-                            min_not_afk_duration=args.min_active,
-                            start_time=backfill_start,
-                        )
-                        or []
-                    )
+                    backfill_events = _deep_scan(state, args)
                 except (ConnectionError, HTTPError) as e:
                     logger.warning(f"Backfill failed due to server error: {e}")
                     backfill_events = []
-                # Sort oldest first for chronological backfill
-                backfill_events.sort(key=lambda e: e.timestamp)
-                if backfill_events:
-                    logger.info(f"Found {len(backfill_events)} unfilled AFK periods to backfill")
-                    for i, event in enumerate(backfill_events):
-                        response = prompt(event, state.state.recent_events, queue_info=_build_queue_info(backfill_events, i))
-                        if response is None:
-                            # User cancelled - skip this one
-                            logger.info(
-                                f"Backfill dialog cancelled for gap at "
-                                f"{format_time_local(event.timestamp)}-{format_time_local(event.timestamp + event.duration)} "
-                                f"({format_duration(event.duration)})"
-                            )
-                            continue
-                        elif isinstance(response, tuple) and response[0] == "SPLIT_MODE":
-                            activities = response[1]
-                            logger.info(f"Posting {len(activities)} split activities")
-                            state.post_split_events(event, activities)
-                        else:
-                            logger.info(response)
-                            state.post_event(event, response)
-                else:
-                    logger.info("No unfilled AFK periods found for backfill")
+                _process_events(state, backfill_events, context="Startup backfill")
+                last_deep_scan = time.monotonic()
 
             if args.backfill_only:
                 logger.info("--backfill-only: exiting after backfill")
@@ -361,30 +390,26 @@ def main() -> None:
             server_down_notified = False
             while True:
                 try:
-                    pending = list(state.get_new_afk_events_to_note(
+                    # Shallow real-time scan (small depth window) for responsiveness:
+                    # catches a just-finished AFK period within one poll interval.
+                    shallow = list(state.get_new_afk_events_to_note(
                         seconds=args.depth * 60,
                         durration_thresh=args.length * 60,
                         min_not_afk_duration=args.min_active,
                     ))
-                    for i, event in enumerate(pending):
-                        response = prompt(event, state.state.recent_events, queue_info=_build_queue_info(pending, i))
-                        if response is None:
-                            # User cancelled/snoozed
-                            logger.info(
-                                f"Dialog cancelled for gap at "
-                                f"{format_time_local(event.timestamp)}-{format_time_local(event.timestamp + event.duration)} "
-                                f"({format_duration(event.duration)})"
-                            )
-                            continue
-                        elif isinstance(response, tuple) and response[0] == "SPLIT_MODE":
-                            # User used split mode
-                            activities = response[1]
-                            logger.info(f"Posting {len(activities)} split activities")
-                            state.post_split_events(event, activities)
-                        else:
-                            # Normal single-entry mode
-                            logger.info(response)
-                            state.post_event(event, response)
+
+                    # Trigger a full deep (backfill-depth) scan either on a ~10-minute
+                    # cadence or immediately before prompting (when the shallow scan found
+                    # something). The deep scan is the authoritative, correctly-ordered
+                    # list we actually prompt from, so periods that slipped out of the
+                    # shallow window are picked up without waiting for a restart.
+                    due_for_deep = (time.monotonic() - last_deep_scan) >= DEEP_SCAN_INTERVAL_SECONDS
+                    if args.backfill and (shallow or due_for_deep):
+                        pending = _deep_scan(state, args)
+                        last_deep_scan = time.monotonic()
+                        _process_events(state, pending, context="Backfill scan")
+                    else:
+                        _process_events(state, shallow, context="AFK check")
                     # Poll succeeded — reset server down tracking
                     if server_down_since is not None:
                         logger.info("Server connection restored.")

@@ -135,7 +135,10 @@ class TestEnhancedEntry:
         """Test that textvariable works correctly."""
         from aw_watcher_afk_prompt.widgets import EnhancedEntry
 
-        var = tk.StringVar(value="initial")
+        # Bind the variable to the fixture's root explicitly. Without a master,
+        # StringVar attaches to the default root, which may be a different Tk
+        # instance (e.g. the one dialog.py creates at import), breaking the link.
+        var = tk.StringVar(master=root, value="initial")
         entry = EnhancedEntry(root, textvariable=var)
         assert entry.get() == "initial"
 
