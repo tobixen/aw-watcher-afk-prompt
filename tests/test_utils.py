@@ -2,7 +2,14 @@
 
 from datetime import UTC, datetime, timedelta, timezone
 
-from aw_watcher_afk_prompt.utils import LOCAL_TIMEZONE, format_duration, format_time_local
+from aw_watcher_afk_prompt.utils import (
+    LOCAL_TIMEZONE,
+    STALE_AGE_THRESHOLD,
+    WARNING_SYMBOL,
+    format_age,
+    format_duration,
+    format_time_local,
+)
 
 
 class TestFormatTimeLocal:
@@ -94,3 +101,49 @@ class TestFormatDuration:
         """Test the specific case from the bug report (1643 minutes)."""
         result = format_duration(timedelta(minutes=1643))
         assert result == "1 day 3 hours"
+
+
+class TestFormatAge:
+    """Tests for the format_age function."""
+
+    def test_seconds_ago(self) -> None:
+        """Sub-minute ages are reported in seconds."""
+        assert format_age(timedelta(seconds=5)) == "5 seconds ago"
+        assert format_age(timedelta(seconds=1)) == "1 second ago"
+
+    def test_zero_and_negative_clamped(self) -> None:
+        """Zero or (clock-skew) negative ages don't produce nonsense."""
+        assert format_age(timedelta(seconds=0)) == "0 seconds ago"
+        assert format_age(timedelta(seconds=-30)) == "0 seconds ago"
+
+    def test_minutes_ago(self) -> None:
+        """Minute-scale ages reuse the duration formatter."""
+        assert format_age(timedelta(minutes=5)) == "5 minutes ago"
+        assert format_age(timedelta(minutes=1)) == "1 minute ago"
+
+    def test_accepts_float_seconds(self) -> None:
+        """A raw float (seconds) is accepted, like format_duration."""
+        assert format_age(45.0) == "45 seconds ago"
+        assert format_age(300.0) == "5 minutes ago"
+
+    def test_no_warning_when_fresh(self) -> None:
+        """Fresh ages (below the stale threshold) carry no warning symbol."""
+        result = format_age(timedelta(minutes=1))
+        assert WARNING_SYMBOL not in result
+
+    def test_warning_when_stale(self) -> None:
+        """Ages at or beyond the stale threshold are flagged with a warning symbol."""
+        result = format_age(STALE_AGE_THRESHOLD)
+        assert result.startswith(WARNING_SYMBOL)
+        assert "ago" in result
+
+    def test_warning_for_old_period(self) -> None:
+        """A multi-hour-old period is clearly flagged."""
+        result = format_age(timedelta(hours=3))
+        assert result.startswith(WARNING_SYMBOL)
+        assert "3 hours ago" in result
+
+    def test_custom_threshold(self) -> None:
+        """The stale threshold can be overridden."""
+        assert WARNING_SYMBOL not in format_age(timedelta(minutes=5), stale_threshold=timedelta(minutes=10))
+        assert format_age(timedelta(minutes=15), stale_threshold=timedelta(minutes=10)).startswith(WARNING_SYMBOL)

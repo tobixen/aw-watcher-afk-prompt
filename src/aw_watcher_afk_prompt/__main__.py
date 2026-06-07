@@ -19,14 +19,22 @@ from aw_watcher_afk_prompt.core import (
     AWAfkPromptError,
     logger,
 )
-from aw_watcher_afk_prompt.utils import format_duration, format_time_local
+from aw_watcher_afk_prompt.utils import format_age, format_duration, format_time_local
 
 
 def prompt(event: aw_core.Event, recent_events: Iterable[aw_core.Event], queue_info: dict | None = None) -> str | None:
+    from datetime import UTC, datetime
+
     # TODO: Allow for customizing the prompt from the prompt interface.
     start_time_str = format_time_local(event.timestamp)
     end_time_str = format_time_local(event.timestamp + event.duration)
-    prompt_text = f"What were you doing from {start_time_str} - {end_time_str} ({format_duration(event.duration)})?"
+    # How long ago this AFK period ended, so the user knows how stale the prompt is
+    # (with a warning symbol for old periods).
+    age_str = format_age(datetime.now(UTC) - (event.timestamp + event.duration))
+    prompt_text = (
+        f"What were you doing from {start_time_str} - {end_time_str} "
+        f"({format_duration(event.duration)})?\n{age_str}"
+    )
     title = "AFK Checkin"
 
     # Pass afk_start and afk_duration_seconds to enable Split button

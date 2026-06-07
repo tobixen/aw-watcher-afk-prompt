@@ -6,6 +6,12 @@ from datetime import timedelta
 
 LOCAL_TIMEZONE = datetime.datetime.now().astimezone().tzinfo
 
+# Age beyond which a prompted AFK period is considered "old" and gets a warning symbol.
+STALE_AGE_THRESHOLD = timedelta(minutes=15)
+
+# Symbol prepended to the age string when a prompt is stale (see STALE_AGE_THRESHOLD).
+WARNING_SYMBOL = "⚠️"
+
 
 def format_duration(duration: timedelta | float) -> str:
     """Format a duration in a human-readable way.
@@ -45,6 +51,40 @@ def format_duration(duration: timedelta | float) -> str:
     if hours > 0:
         parts.append(f"{hours} hour{'s' if hours != 1 else ''}")
     return " ".join(parts)
+
+
+def format_age(age: timedelta | float, *, stale_threshold: timedelta = STALE_AGE_THRESHOLD) -> str:
+    """Format how long ago something happened, for display in the prompt.
+
+    Sub-minute ages are reported in seconds; longer ages reuse ``format_duration``.
+    When the age reaches ``stale_threshold`` the result is prefixed with
+    ``WARNING_SYMBOL`` so the user can tell at a glance they are being prompted
+    about an old AFK period.
+
+    Args:
+        age: Time elapsed, as a timedelta or total seconds as a float.
+        stale_threshold: Age at or above which the warning symbol is added.
+
+    Returns:
+        Strings like ``"5 seconds ago"``, ``"5 minutes ago"`` or
+        ``"⚠️ 3 hours ago"``.
+    """
+    age_td = age if isinstance(age, timedelta) else timedelta(seconds=age)
+
+    # Guard against clock skew producing a "negative age".
+    if age_td.total_seconds() < 0:
+        age_td = timedelta(0)
+
+    total_seconds = age_td.total_seconds()
+    if total_seconds < 60:
+        secs = int(total_seconds)
+        human = f"{secs} second{'s' if secs != 1 else ''} ago"
+    else:
+        human = f"{format_duration(age_td)} ago"
+
+    if age_td >= stale_threshold:
+        return f"{WARNING_SYMBOL} {human}"
+    return human
 
 
 def format_time_local(dt: datetime.datetime, include_seconds: bool = False) -> str:
