@@ -22,15 +22,23 @@ from aw_watcher_afk_prompt.core import (
 from aw_watcher_afk_prompt.utils import format_age, format_duration, format_time_local
 
 
-def prompt(event: aw_core.Event, recent_events: Iterable[aw_core.Event], queue_info: dict | None = None) -> str | None:
-    from datetime import UTC, datetime
+def prompt(
+    event: aw_core.Event,
+    recent_events: Iterable[aw_core.Event],
+    queue_info: dict | None = None,
+    stale_minutes: float = 15.0,
+) -> str | None:
+    from datetime import UTC, datetime, timedelta
 
     # TODO: Allow for customizing the prompt from the prompt interface.
     start_time_str = format_time_local(event.timestamp)
     end_time_str = format_time_local(event.timestamp + event.duration)
     # How long ago this AFK period ended, so the user knows how stale the prompt is
-    # (with a warning symbol for old periods).
-    age_str = format_age(datetime.now(UTC) - (event.timestamp + event.duration))
+    # (with a warning symbol for periods older than stale_minutes).
+    age_str = format_age(
+        datetime.now(UTC) - (event.timestamp + event.duration),
+        stale_threshold=timedelta(minutes=stale_minutes),
+    )
     prompt_text = (
         f"What were you doing from {start_time_str} - {end_time_str} "
         f"({format_duration(event.duration)})?\n{age_str}"
@@ -46,12 +54,6 @@ def prompt(event: aw_core.Event, recent_events: Iterable[aw_core.Event], queue_i
         afk_duration_seconds=event.duration.total_seconds(),
         queue_info=queue_info,
     )
-
-
-# How often (seconds) the normal loop performs a full deep (backfill-depth) scan
-# in addition to the shallow real-time scan, so periods that slipped out of the
-# shallow window are picked up without waiting for a restart.
-DEEP_SCAN_INTERVAL_SECONDS = 600  # ~10 minutes
 
 
 def _deep_scan(state: AWAfkPromptClient, args) -> list[aw_core.Event]:
@@ -75,7 +77,9 @@ def _deep_scan(state: AWAfkPromptClient, args) -> list[aw_core.Event]:
     )
 
 
-def _process_events(state: AWAfkPromptClient, events: list[aw_core.Event], *, context: str) -> None:
+def _process_events(
+    state: AWAfkPromptClient, events: list[aw_core.Event], *, context: str, stale_minutes: float = 15.0
+) -> None:
     """Prompt the user for each unfilled AFK period, oldest first.
 
     Each prompt carries queue info ("(N of total) — next: …") so the user can see
@@ -88,7 +92,9 @@ def _process_events(state: AWAfkPromptClient, events: list[aw_core.Event], *, co
         return
     logger.info(f"{context}: {len(events)} unfilled AFK period(s) to prompt")
     for i, event in enumerate(events):
-        response = prompt(event, state.state.recent_events, queue_info=_build_queue_info(events, i))
+        response = prompt(
+            event, state.state.recent_events, queue_info=_build_queue_info(events, i), stale_minutes=stale_minutes
+        )
         if response is None:
             # User cancelled/snoozed
             logger.info(
@@ -216,6 +222,20 @@ def main() -> None:
         type=float,
         default=config.get("backfill_depth", 1440),
         help="How far back (in minutes) to look for unfilled AFK periods (default: 1440 = 24h).",
+    )
+    parser.add_argument(
+        "--backfill-interval",
+        type=float,
+        default=config.get("backfill_interval", 10),
+        help="How often (in minutes) to repeat the full backfill-depth scan during normal "
+        "operation (default: from config or 10).",
+    )
+    parser.add_argument(
+        "--stale-warning",
+        type=float,
+        default=config.get("stale_warning", 15),
+        help="AFK periods older than this (in minutes) get a warning symbol in the prompt "
+        "(default: from config or 15).",
     )
     parser.add_argument(
         "--min-active",
@@ -378,7 +398,9 @@ def main() -> None:
                 except (ConnectionError, HTTPError) as e:
                     logger.warning(f"Backfill failed due to server error: {e}")
                     backfill_events = []
-                _process_events(state, backfill_events, context="Startup backfill")
+                _process_events(
+                    state, backfill_events, context="Startup backfill", stale_minutes=args.stale_warning
+                )
                 last_deep_scan = time.monotonic()
 
             if args.backfill_only:
@@ -386,6 +408,7 @@ def main() -> None:
                 return
 
             # Normal operation loop
+            deep_scan_interval = args.backfill_interval * 60  # config is in minutes
             server_down_since = None
             server_down_notified = False
             while True:
@@ -403,13 +426,13 @@ def main() -> None:
                     # something). The deep scan is the authoritative, correctly-ordered
                     # list we actually prompt from, so periods that slipped out of the
                     # shallow window are picked up without waiting for a restart.
-                    due_for_deep = (time.monotonic() - last_deep_scan) >= DEEP_SCAN_INTERVAL_SECONDS
+                    due_for_deep = (time.monotonic() - last_deep_scan) >= deep_scan_interval
                     if args.backfill and (shallow or due_for_deep):
                         pending = _deep_scan(state, args)
                         last_deep_scan = time.monotonic()
-                        _process_events(state, pending, context="Backfill scan")
+                        _process_events(state, pending, context="Backfill scan", stale_minutes=args.stale_warning)
                     else:
-                        _process_events(state, shallow, context="AFK check")
+                        _process_events(state, shallow, context="AFK check", stale_minutes=args.stale_warning)
                     # Poll succeeded — reset server down tracking
                     if server_down_since is not None:
                         logger.info("Server connection restored.")

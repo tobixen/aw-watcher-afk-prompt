@@ -19,6 +19,8 @@ def test_default_config_has_expected_keys() -> None:
     assert "history_limit" in config
     assert "enable_backfill" in config
     assert "backfill_depth" in config
+    assert "backfill_interval" in config
+    assert "stale_warning" in config
 
 
 def test_default_config_values() -> None:
@@ -34,6 +36,8 @@ def test_default_config_values() -> None:
     assert config["history_limit"] == 100
     assert config["enable_backfill"] is True
     assert config["backfill_depth"] == 1440
+    assert config["backfill_interval"] == 10
+    assert config["stale_warning"] == 15
 
 
 def test_load_config_returns_defaults_when_no_file() -> None:

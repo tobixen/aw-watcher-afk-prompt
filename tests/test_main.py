@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 import aw_core
 
 import aw_watcher_afk_prompt.__main__ as main
+from aw_watcher_afk_prompt.utils import WARNING_SYMBOL
 
 
 def _event(minute: int, duration_min: int = 6) -> aw_core.Event:
@@ -29,7 +30,7 @@ class TestProcessEvents:
         """Events handed in out of order must be prompted oldest-first."""
         seen_timestamps: list[datetime] = []
 
-        def fake_prompt(event, recent_events, queue_info=None):  # noqa: ARG001
+        def fake_prompt(event, recent_events, queue_info=None, stale_minutes=15.0):  # noqa: ARG001
             seen_timestamps.append(event.timestamp)
             return None  # cancelled — keeps the test focused on ordering
 
@@ -45,7 +46,7 @@ class TestProcessEvents:
         """Each prompt should report '(N of total)' so the user knows more are pending."""
         positions: list[tuple[int, int]] = []
 
-        def fake_prompt(event, recent_events, queue_info=None):  # noqa: ARG001
+        def fake_prompt(event, recent_events, queue_info=None, stale_minutes=15.0):  # noqa: ARG001
             assert queue_info is not None
             positions.append((queue_info["position"], queue_info["total"]))
             return None
@@ -61,7 +62,7 @@ class TestProcessEvents:
         """A lone period should not advertise a queue."""
         captured: list = []
 
-        def fake_prompt(event, recent_events, queue_info=None):  # noqa: ARG001
+        def fake_prompt(event, recent_events, queue_info=None, stale_minutes=15.0):  # noqa: ARG001
             captured.append(queue_info)
             return None
 
@@ -76,7 +77,7 @@ class TestProcessEvents:
         events = [_event(10), _event(20), _event(30)]
         responses = {10: "reading", 20: ("SPLIT_MODE", ["a", "b"]), 30: None}
 
-        def fake_prompt(event, recent_events, queue_info=None):  # noqa: ARG001
+        def fake_prompt(event, recent_events, queue_info=None, stale_minutes=15.0):  # noqa: ARG001
             return responses[event.timestamp.minute]
 
         monkeypatch.setattr(main, "prompt", fake_prompt)
@@ -89,6 +90,18 @@ class TestProcessEvents:
         assert state.post_split_events.call_count == 1
         assert state.post_split_events.call_args.args[1] == ["a", "b"]
 
+    def test_stale_minutes_threads_through_to_prompt(self, monkeypatch) -> None:
+        """_process_events must pass its stale_minutes down to each prompt."""
+        captured: list[float] = []
+
+        def fake_prompt(event, recent_events, queue_info=None, stale_minutes=15.0):  # noqa: ARG001
+            captured.append(stale_minutes)
+            return None
+
+        monkeypatch.setattr(main, "prompt", fake_prompt)
+        main._process_events(_fake_state(), [_event(10)], context="Test", stale_minutes=42.0)
+        assert captured == [42.0]
+
     def test_empty_is_noop(self, monkeypatch) -> None:
         called = False
 
@@ -99,3 +112,29 @@ class TestProcessEvents:
         monkeypatch.setattr(main, "prompt", fake_prompt)
         main._process_events(_fake_state(), [], context="Test")
         assert called is False
+
+
+class TestPromptStaleThreshold:
+    """The warning symbol in the prompt text must respect the configured threshold."""
+
+    def _capture_prompt_text(self, monkeypatch, *, age_min: int, stale_minutes: float) -> str:
+        captured: dict[str, str] = {}
+
+        def fake_ask_string(title, prompt_text, *args, **kwargs):  # noqa: ARG001
+            captured["text"] = prompt_text
+            return None
+
+        monkeypatch.setattr(main.aw_dialog, "ask_string", fake_ask_string)
+
+        ended = datetime.now(UTC) - timedelta(minutes=age_min)
+        event = aw_core.Event(id=None, timestamp=ended - timedelta(minutes=6), duration=timedelta(minutes=6))
+        main.prompt(event, [], stale_minutes=stale_minutes)
+        return captured["text"]
+
+    def test_warning_shown_when_older_than_threshold(self, monkeypatch) -> None:
+        text = self._capture_prompt_text(monkeypatch, age_min=20, stale_minutes=15)
+        assert WARNING_SYMBOL in text
+
+    def test_no_warning_when_within_threshold(self, monkeypatch) -> None:
+        text = self._capture_prompt_text(monkeypatch, age_min=20, stale_minutes=30)
+        assert WARNING_SYMBOL not in text

@@ -30,6 +30,17 @@ enable_backfill = true
 # Default: 1440 (24 hours)
 backfill_depth = 1440
 
+# How often (in minutes) to repeat the full backfill-depth scan during normal
+# operation, in addition to scanning right before prompting. Lower values catch
+# missed AFK periods sooner at the cost of slightly more frequent server queries.
+# Default: 10
+backfill_interval = 10
+
+# AFK periods older than this (in minutes) are flagged with a ⚠️ warning symbol
+# in the prompt, so it's obvious when you're being asked about a stale interval.
+# Default: 15
+stale_warning = 15
+
 # Minimum duration (in seconds) for a not-afk event to count as "real" activity.
 # Not-afk events shorter than this are ignored, so brief laptop touches don't
 # split a long AFK period into smaller ones that fall below the threshold.
