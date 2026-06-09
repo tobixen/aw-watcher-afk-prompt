@@ -14,6 +14,9 @@ from aw_watcher_afk_prompt.widgets import EnhancedEntry
 
 logger = logging.getLogger(__name__)
 
+# How often the ongoing dialog polls the afk watcher to notice the user returned.
+_AFK_POLL_INTERVAL_MS = 5_000
+
 root = tk.Tk()
 root.withdraw()
 
@@ -177,7 +180,7 @@ abbreviations = _AbbreviationStore()
 # TODO: This widget pops up off-center when using multiple screes on Linux, possibly other platforms.
 # See https://stackoverflow.com/questions/30312875/tkinter-winfo-screenwidth-when-used-with-dual-monitors/57866046#57866046
 class AWAfkPromptDialog(simpledialog.Dialog):
-    def __init__(self, title: str, prompt: str, history: list[str], afk_start=None, afk_duration_seconds=None, queue_info: dict | None = None, is_ongoing: bool = False) -> None:
+    def __init__(self, title: str, prompt: str, history: list[str], afk_start=None, afk_duration_seconds=None, queue_info: dict | None = None, is_ongoing: bool = False, still_afk_check=None) -> None:
         self.prompt = prompt
         self.history = history
         self.history_index = len(history)
@@ -186,6 +189,9 @@ class AWAfkPromptDialog(simpledialog.Dialog):
         self.split_mode = False  # Track if user wants split mode
         self.queue_info = queue_info  # dict with 'position', 'total', 'next_str' keys
         self.is_ongoing = is_ongoing
+        # Callable returning True while the user is still AFK. Polled so the dialog
+        # can notice the user returned (via the OS afk watcher) without them typing.
+        self.still_afk_check = still_afk_check
         super().__init__(root, title)
 
     # @override (when we get to 3.12)
@@ -199,6 +205,7 @@ class AWAfkPromptDialog(simpledialog.Dialog):
         # Copied from the simpledialog source code.
         w = ttk.Label(master, text=self.prompt, justify=tk.LEFT)
         w.grid(row=0, padx=5, sticky=tk.W)
+        self._prompt_label = w
 
         # Input field (EnhancedEntry provides Ctrl+Backspace and Ctrl+w shortcuts)
         self.entry = EnhancedEntry(master, name="entry", width=40)
@@ -241,6 +248,13 @@ class AWAfkPromptDialog(simpledialog.Dialog):
             duration_label = ttk.Label(master, textvariable=self._duration_var, justify=tk.LEFT)
             duration_label.grid(row=2, padx=5, sticky=tk.W, columnspan=2)
             self._live_timer = self.after(10_000, self._tick_duration)
+            # Once the user types, they're back: the period is assumed over, so
+            # stop the live counter and drop the "still AFK" wording.
+            self.entry.bind("<KeyPress>", self._mark_returned, add="+")
+            # Also notice when the OS afk watcher reports the user is active again,
+            # even if they haven't touched our dialog yet.
+            if self.still_afk_check is not None:
+                self._afk_poll_timer = self.after(_AFK_POLL_INTERVAL_MS, self._poll_afk)
 
         # Queue info label: shown when multiple AFK intervals are pending
         if self.queue_info:
@@ -268,6 +282,52 @@ class AWAfkPromptDialog(simpledialog.Dialog):
 
         elapsed = datetime.now(UTC) - self.afk_start
         return f"Time away so far: {format_duration(elapsed)} (updating...)"
+
+    def _poll_afk(self) -> None:
+        """Check whether the OS afk watcher still reports the user as AFK.
+
+        When it no longer does, the user has returned, so freeze the dialog even
+        if they haven't typed into it yet.
+        """
+        try:
+            still_afk = self.still_afk_check()
+        except Exception:
+            logger.exception("still_afk_check failed; assuming user still AFK")
+            still_afk = True
+        if not still_afk:
+            self._mark_returned()
+            return
+        self._afk_poll_timer = self.after(_AFK_POLL_INTERVAL_MS, self._poll_afk)
+
+    def _mark_returned(self, event=None) -> None:  # noqa: ARG002
+        """The user is back (they typed, or the afk watcher reports activity):
+        freeze the duration and drop the 'still AFK' wording so the dialog no
+        longer claims the period is ongoing."""
+        if getattr(self, "_returned", False):
+            return
+        self._returned = True
+        if hasattr(self, "_live_timer"):
+            self.after_cancel(self._live_timer)
+            del self._live_timer
+        if hasattr(self, "_afk_poll_timer"):
+            self.after_cancel(self._afk_poll_timer)
+            del self._afk_poll_timer
+        # The dialog's auto-snooze was disabled while the user was away; now that
+        # they're back, arm it so the dialog doesn't sit forever if they wander off.
+        if not hasattr(self, "_timeout_id"):
+            self._timeout_id = self.after(120_000, self.cancel_with_snooze)
+        # Freeze the live duration label (no more "updating...").
+        if hasattr(self, "_duration_var") and self.afk_start is not None:
+            from datetime import UTC, datetime
+
+            from aw_watcher_afk_prompt.utils import format_duration
+
+            elapsed = datetime.now(UTC) - self.afk_start
+            self._duration_var.set(f"Time away: {format_duration(elapsed)}")
+        # Drop the trailing "(still AFK)" marker from the prompt label.
+        if hasattr(self, "_prompt_label"):
+            new_text = re.sub(r"\s*\(still AFK\)\s*$", "", self._prompt_label.cget("text"))
+            self._prompt_label.configure(text=new_text)
 
     def _tick_duration(self) -> None:
         if hasattr(self, "_duration_var"):
@@ -396,6 +456,9 @@ class AWAfkPromptDialog(simpledialog.Dialog):
         if hasattr(self, "_live_timer"):
             self.after_cancel(self._live_timer)
             del self._live_timer
+        if hasattr(self, "_afk_poll_timer"):
+            self.after_cancel(self._afk_poll_timer)
+            del self._afk_poll_timer
         self.withdraw()
         self.destroy()
 
@@ -410,9 +473,21 @@ class AWAfkPromptDialog(simpledialog.Dialog):
     def switch_to_split_mode(self):
         """Switch to split mode (close this dialog and open split dialog)."""
         self.split_mode = True
+        # For an ongoing period the end time is unknown; assume it ends now so
+        # the split dialog has a concrete total duration to distribute.
+        if self.afk_duration_seconds is None and self.afk_start is not None:
+            from datetime import UTC, datetime
+
+            self.afk_duration_seconds = (datetime.now(UTC) - self.afk_start).total_seconds()
         if hasattr(self, "_timeout_id"):
             self.after_cancel(self._timeout_id)
             del self._timeout_id
+        if hasattr(self, "_live_timer"):
+            self.after_cancel(self._live_timer)
+            del self._live_timer
+        if hasattr(self, "_afk_poll_timer"):
+            self.after_cancel(self._afk_poll_timer)
+            del self._afk_poll_timer
         self.destroy()
 
     # @override (when we get to 3.12)
@@ -432,8 +507,10 @@ class AWAfkPromptDialog(simpledialog.Dialog):
         w = ttk.Button(box, text="Unknown", width=10, command=self.submit_unknown)
         w.pack(side=tk.LEFT, padx=5, pady=5)
 
-        # Split button (only show if afk_start and afk_duration_seconds are provided)
-        if self.afk_start is not None and self.afk_duration_seconds is not None:
+        # Split button: shown when we know the start. For a still-ongoing period
+        # the end is unknown, but clicking Split assumes the period ends now, so
+        # switch_to_split_mode snapshots the duration as start..now.
+        if self.afk_start is not None and (self.afk_duration_seconds is not None or self.is_ongoing):
             w = ttk.Button(box, text="Split", width=10, command=self.switch_to_split_mode)
             w.pack(side=tk.LEFT, padx=5, pady=5)
 
@@ -562,6 +639,7 @@ def ask_string(
     initial_value: str | None = None,
     queue_info: dict | None = None,
     is_ongoing: bool = False,
+    still_afk_check=None,
 ) -> str | None | tuple:
     """Ask for a string input, with optional split mode support.
 
@@ -581,7 +659,7 @@ def ask_string(
     # Loop to handle switching between single and split modes
     initial_text = initial_value
     while True:
-        d = AWAfkPromptDialog(title, prompt, history, afk_start, afk_duration_seconds, queue_info=queue_info, is_ongoing=is_ongoing)
+        d = AWAfkPromptDialog(title, prompt, history, afk_start, afk_duration_seconds, queue_info=queue_info, is_ongoing=is_ongoing, still_afk_check=still_afk_check)
 
         # Pre-fill with initial value or text from split mode
         if initial_text:
@@ -597,8 +675,9 @@ def ask_string(
             # Import here to avoid circular dependency
             from aw_watcher_afk_prompt.split_dialog import ask_split_activities
 
-            # Show split dialog
-            result = ask_split_activities(title, prompt, afk_start, afk_duration_seconds, history)
+            # Show split dialog. Use the dialog's duration, which switch_to_split_mode
+            # snapshots to start..now for ongoing periods (passed-in value is None there).
+            result = ask_split_activities(title, prompt, afk_start, d.afk_duration_seconds, history)
 
             # Check what the split dialog returned
             if result is None:

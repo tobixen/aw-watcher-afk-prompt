@@ -114,6 +114,67 @@ class TestProcessEvents:
         assert called is False
 
 
+class TestPostOngoingResponse:
+    """Dispatch of the live 'still AFK' dialog result.
+
+    The ongoing dialog now offers a Split button (the AFK period is assumed to
+    end the moment the user types/clicks), so its result may be a SPLIT_MODE
+    tuple, a plain description, or None — and each must route like the batched
+    path in _process_events.
+    """
+
+    def _ongoing(self) -> aw_core.Event:
+        ts = datetime.now(UTC) - timedelta(minutes=30)
+        return aw_core.Event(id=None, timestamp=ts, duration=timedelta(0))
+
+    def test_none_posts_nothing(self) -> None:
+        state = _fake_state()
+        main._post_ongoing_response(state, self._ongoing(), None)
+        state.post_event.assert_not_called()
+        state.post_split_events.assert_not_called()
+
+    def test_plain_string_posts_single_event_with_snapshot_duration(self) -> None:
+        state = _fake_state()
+        ongoing = self._ongoing()
+        main._post_ongoing_response(state, ongoing, "writing code")
+        state.post_split_events.assert_not_called()
+        state.post_event.assert_called_once()
+        posted_event, message = state.post_event.call_args.args
+        assert message == "writing code"
+        # The period is assumed over now, so duration is start..now (~30 min), not 0.
+        assert posted_event.timestamp == ongoing.timestamp
+        assert posted_event.duration.total_seconds() > 60
+
+    def test_split_mode_routes_to_post_split_events(self) -> None:
+        state = _fake_state()
+        ongoing = self._ongoing()
+        activities = [object(), object()]
+        main._post_ongoing_response(state, ongoing, ("SPLIT_MODE", activities))
+        state.post_event.assert_not_called()
+        state.post_split_events.assert_called_once_with(ongoing, activities)
+
+
+class TestPromptOngoing:
+    """The live 'still AFK' dialog must be able to notice the user returned."""
+
+    def test_forwards_still_afk_check_and_marks_ongoing(self, monkeypatch) -> None:
+        captured: dict = {}
+
+        def fake_ask_string(title, prompt_text, history, **kwargs):  # noqa: ARG001
+            captured.update(kwargs)
+            return None
+
+        monkeypatch.setattr(main.aw_dialog, "ask_string", fake_ask_string)
+
+        sentinel = object()
+        ongoing = aw_core.Event(id=None, timestamp=datetime.now(UTC) - timedelta(minutes=5), duration=timedelta(0))
+        main.prompt_ongoing(ongoing, [], still_afk_check=sentinel)
+
+        assert captured["is_ongoing"] is True
+        assert captured["still_afk_check"] is sentinel
+        assert captured["afk_duration_seconds"] is None
+
+
 class TestPromptStaleThreshold:
     """The warning symbol in the prompt text must respect the configured threshold."""
 

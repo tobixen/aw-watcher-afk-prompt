@@ -59,13 +59,15 @@ def prompt(
 def prompt_ongoing(
     event: aw_core.Event,
     recent_events,
+    still_afk_check=None,
 ) -> str | None:
     """Show a live-updating dialog for an AFK period that is still in progress.
 
     Unlike ``prompt()``, the end time is unknown so we show a ticking duration
-    counter instead.  Split mode is not available (we don't know the final end
-    time), and the auto-snooze timeout is disabled so the dialog persists until
-    the user sits down and answers it.
+    counter instead.  ``still_afk_check`` is polled so the dialog can notice the
+    user returned (via the OS afk watcher) and freeze itself, even before they
+    type anything.  The auto-snooze timeout is disabled while still away so the
+    dialog persists until the user sits down.
     """
     start_time_str = format_time_local(event.timestamp)
     prompt_text = f"What were you doing from {start_time_str}? (still AFK)"
@@ -76,6 +78,7 @@ def prompt_ongoing(
         afk_start=event.timestamp,
         afk_duration_seconds=None,
         is_ongoing=True,
+        still_afk_check=still_afk_check,
     )
 
 
@@ -133,6 +136,27 @@ def _process_events(
         else:
             logger.info(response)
             state.post_event(event, response)
+
+
+def _post_ongoing_response(state: AWAfkPromptClient, ongoing: aw_core.Event, response) -> None:
+    """Dispatch the result of the live 'still AFK' dialog.
+
+    The AFK period is assumed to end the moment the user answers (types text or
+    clicks Split), so the single-event path stamps a duration of start..now.
+    Split results carry their own per-activity timestamps already.
+    """
+    if response is None:
+        return
+    from datetime import UTC, datetime
+
+    if isinstance(response, tuple) and response[0] == "SPLIT_MODE":
+        activities = response[1]
+        logger.info(f"Posting {len(activities)} split activities")
+        state.post_split_events(ongoing, activities)
+    else:
+        actual_duration = datetime.now(UTC) - ongoing.timestamp
+        actual_event = aw_core.Event(None, ongoing.timestamp, actual_duration)
+        state.post_event(actual_event, response)
 
 
 def _build_queue_info(events: list[aw_core.Event], index: int) -> dict | None:
@@ -453,12 +477,12 @@ def main() -> None:
                         ongoing = state.get_ongoing_afk_event(args.length * 60)
                         if ongoing and ongoing.timestamp != prompted_ongoing_start:
                             prompted_ongoing_start = ongoing.timestamp
-                            response = prompt_ongoing(ongoing, state.state.recent_events)
-                            if response is not None:
-                                from datetime import UTC, datetime
-                                actual_duration = datetime.now(UTC) - ongoing.timestamp
-                                actual_event = aw_core.Event(None, ongoing.timestamp, actual_duration)
-                                state.post_event(actual_event, response)
+                            response = prompt_ongoing(
+                                ongoing,
+                                state.state.recent_events,
+                                still_afk_check=lambda: state.get_ongoing_afk_event(args.length * 60) is not None,
+                            )
+                            _post_ongoing_response(state, ongoing, response)
 
                     # Trigger a full deep (backfill-depth) scan either on a ~10-minute
                     # cadence or immediately before prompting (when the shallow scan found

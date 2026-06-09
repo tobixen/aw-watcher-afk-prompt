@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A live-updating check-in dialog can now appear *before* you return to the computer, showing a ticking "time away so far" counter for the ongoing AFK period. It offers the same Split button as the normal prompt (clicking Split assumes the period ends now). When you come back — either by typing into the dialog or by the OS afk watcher detecting activity, even without touching the dialog — it freezes the counter and drops the "still AFK" wording.
 - The full backfill-depth (e.g. 24 h) scan now also runs during normal operation — on a ~10-minute cadence (configurable via `backfill_interval`) and immediately before prompting — instead of only at startup. Missed AFK periods are picked up within ~10 minutes rather than waiting for the next restart. Prompts are always shown oldest-first with queue info ("(N of total) — next: …") so it's clear when more periods remain to be backfilled.
 - The check-in prompt now shows how long ago the AFK period ended (e.g. "5 minutes ago"), with a ⚠️ warning symbol for old periods (older than `stale_warning` minutes, default 15), so it's obvious when you're being prompted about a stale interval.
 - Log at INFO level when the prompt dialog is cancelled (previously silent, making it impossible to audit missed gaps from the journal).
