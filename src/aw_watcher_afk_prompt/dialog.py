@@ -272,7 +272,17 @@ class AWAfkPromptDialog(simpledialog.Dialog):
     def _tick_duration(self) -> None:
         if hasattr(self, "_duration_var"):
             self._duration_var.set(self._make_duration_text())
-            self._live_timer = self.after(10_000, self._tick_duration)
+            from datetime import UTC, datetime
+
+            elapsed_s = (datetime.now(UTC) - self.afk_start).total_seconds()
+            # Wake up just after the display value changes: every minute below 24 h,
+            # every hour above (format_duration switches to "X days Y hours" there).
+            if elapsed_s < 24 * 3600:
+                interval_s = 60 - (elapsed_s % 60)
+            else:
+                interval_s = 3600 - (elapsed_s % 3600)
+            ms = int(interval_s * 1000) + 200  # 200 ms buffer so we don't fire slightly early
+            self._live_timer = self.after(ms, self._tick_duration)
 
     def save_new_abbreviation(self, event=None, *, long: bool = False):  # noqa: ARG002
         if self.entry.selection_present():
