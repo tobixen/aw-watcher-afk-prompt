@@ -37,7 +37,17 @@ After=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=aw-watcher-afk-prompt
+# This is a --user service: prefer a per-user install (pipx/uv/pip --user, which
+# land in ~/.local/bin) over any system-wide copy, so `make install` as the user
+# actually takes effect on restart. %h expands to the user's home directory.
+#
+# A bare `ExecStart=aw-watcher-afk-prompt` would be resolved using the *service
+# manager's* PATH (typically /usr/local/bin:/usr/bin), ignoring the PATH set
+# below. Launching through `/usr/bin/env` instead makes the binary lookup honour
+# this unit's PATH, so ~/.local/bin wins — while still falling back to a
+# system-wide install for users who have one.
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/env aw-watcher-afk-prompt
 Restart=on-failure
 RestartSec=10
 Environment=PYTHONUNBUFFERED=1
