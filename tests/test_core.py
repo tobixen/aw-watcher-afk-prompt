@@ -3,7 +3,7 @@ import datetime
 
 import aw_core
 
-from aw_watcher_afk_prompt.core import AWAfkPromptState, adjust_gap_start_for_window_activity
+from aw_watcher_afk_prompt.core import AWAfkPromptState, adjust_gap_start_for_window_activity, get_ongoing_afk_start
 
 AFK = "afk"
 NOT_AFK = "not-afk"
@@ -488,3 +488,46 @@ def test_stale_events_dont_suppress_boot_gap_via_right_boundary():
 
     boot_gaps = [e for e in unseen if e.duration.total_seconds() > 50 * 60]
     assert len(boot_gaps) == 1, "boot gap (~70 min) must be detected — stale events must not suppress it"
+
+
+# ---------------------------------------------------------------------------
+# Tests for get_ongoing_afk_start
+# ---------------------------------------------------------------------------
+
+
+def test_get_ongoing_afk_start_returns_none_when_not_afk():
+    """Returns None when most recent event is not-afk."""
+    events: list[TupleEvent] = [
+        (0, 60, NOT_AFK),
+        (60, 30, AFK),
+        (90, 10, NOT_AFK),
+    ]
+    result = get_ongoing_afk_start([_tuple_to_event(t) for t in events])
+    assert result is None
+
+
+def test_get_ongoing_afk_start_returns_none_when_empty():
+    """Returns None for empty event list."""
+    assert get_ongoing_afk_start([]) is None
+
+
+def test_get_ongoing_afk_start_returns_end_of_last_not_afk():
+    """Returns end of the last not-afk event when currently AFK."""
+    events: list[TupleEvent] = [
+        (0, 100, NOT_AFK),
+        (100, 50, NOT_AFK),
+        (150, 300, AFK),
+    ]
+    result = get_ongoing_afk_start([_tuple_to_event(t) for t in events])
+    expected = FIRST_DATE + datetime.timedelta(seconds=150)  # end of not-afk at t=100, duration=50
+    assert result == expected
+
+
+def test_get_ongoing_afk_start_returns_none_when_no_not_afk_events():
+    """Returns None when all events are AFK (no not-afk boundary found)."""
+    events: list[TupleEvent] = [
+        (0, 300, AFK),
+        (300, 300, AFK),
+    ]
+    result = get_ongoing_afk_start([_tuple_to_event(t) for t in events])
+    assert result is None

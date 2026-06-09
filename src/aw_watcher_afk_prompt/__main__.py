@@ -56,6 +56,29 @@ def prompt(
     )
 
 
+def prompt_ongoing(
+    event: aw_core.Event,
+    recent_events,
+) -> str | None:
+    """Show a live-updating dialog for an AFK period that is still in progress.
+
+    Unlike ``prompt()``, the end time is unknown so we show a ticking duration
+    counter instead.  Split mode is not available (we don't know the final end
+    time), and the auto-snooze timeout is disabled so the dialog persists until
+    the user sits down and answers it.
+    """
+    start_time_str = format_time_local(event.timestamp)
+    prompt_text = f"What were you doing from {start_time_str}? (still AFK)"
+    return aw_dialog.ask_string(
+        "AFK Checkin (ongoing)",
+        prompt_text,
+        [e.data.get(DATA_KEY, "") for e in recent_events],
+        afk_start=event.timestamp,
+        afk_duration_seconds=None,
+        is_ongoing=True,
+    )
+
+
 def _deep_scan(state: AWAfkPromptClient, args) -> list[aw_core.Event]:
     """Run the full backfill-depth (e.g. 24h) lookup and return unfilled AFK periods.
 
@@ -411,6 +434,9 @@ def main() -> None:
             deep_scan_interval = args.backfill_interval * 60  # config is in minutes
             server_down_since = None
             server_down_notified = False
+            # Track which ongoing AFK period we've already shown a pre-emptive dialog for,
+            # identified by its start timestamp. Reset when a new AFK period starts.
+            prompted_ongoing_start = None
             while True:
                 try:
                     # Shallow real-time scan (small depth window) for responsiveness:
@@ -420,6 +446,19 @@ def main() -> None:
                         durration_thresh=args.length * 60,
                         min_not_afk_duration=args.min_active,
                     ))
+
+                    if not shallow:
+                        # Still AFK (or nothing to do) — check if we should show a
+                        # pre-emptive live dialog before the user sits back down.
+                        ongoing = state.get_ongoing_afk_event(args.length * 60)
+                        if ongoing and ongoing.timestamp != prompted_ongoing_start:
+                            prompted_ongoing_start = ongoing.timestamp
+                            response = prompt_ongoing(ongoing, state.state.recent_events)
+                            if response is not None:
+                                from datetime import UTC, datetime
+                                actual_duration = datetime.now(UTC) - ongoing.timestamp
+                                actual_event = aw_core.Event(None, ongoing.timestamp, actual_duration)
+                                state.post_event(actual_event, response)
 
                     # Trigger a full deep (backfill-depth) scan either on a ~10-minute
                     # cadence or immediately before prompting (when the shallow scan found

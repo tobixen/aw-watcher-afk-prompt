@@ -181,6 +181,25 @@ def adjust_gap_start_for_window_activity(
     return aw_core.Event(None, afk_event_start, new_duration, gap.data)
 
 
+def get_ongoing_afk_start(events: list[aw_core.Event]) -> datetime.datetime | None:
+    """Return the start of the currently-ongoing AFK period, or None if not currently AFK.
+
+    The start is defined as the end of the last not-afk event (when activity stopped).
+    Returns None if the most recent event is not-afk, the list is empty, or there are
+    no not-afk events to anchor the start.
+    """
+    if not events:
+        return None
+    most_recent = events[-1]
+    if not is_afk(most_recent):
+        return None
+    non_afk = [e for e in events if not is_afk(e)]
+    if not non_afk:
+        return None
+    last_non_afk = non_afk[-1]
+    return last_non_afk.timestamp + last_non_afk.duration
+
+
 def get_gaps(events: list[aw_core.Event]) -> Iterator[aw_core.Event]:
     flattened_events = aw_transform.sort_by_timestamp(squash_overlaps(events))
     for first, second in pairwise(flattened_events):
@@ -495,6 +514,21 @@ class AWAfkPromptClient:
 
         logger.warning(f"Reached max limit ({max_limit}) without finding gap boundaries")
         return all_events, limit
+
+    def get_ongoing_afk_event(self, durration_thresh: float) -> aw_core.Event | None:
+        """Return a synthetic event for the currently-ongoing AFK period if long enough to prompt.
+
+        Used to show a live-updating dialog before the user returns to the computer.
+        Returns None if not currently AFK or the AFK duration is below the threshold.
+        """
+        all_events, _ = self._fetch_events_with_dynamic_limit()
+        afk_start = get_ongoing_afk_start(all_events)
+        if afk_start is None:
+            return None
+        duration = get_utc_now() - afk_start
+        if duration.total_seconds() < durration_thresh:
+            return None
+        return aw_core.Event(None, afk_start, duration, {"status": "afk", "ongoing": True})
 
     def get_new_afk_events_to_note(
         self,

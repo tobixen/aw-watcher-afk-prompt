@@ -177,7 +177,7 @@ abbreviations = _AbbreviationStore()
 # TODO: This widget pops up off-center when using multiple screes on Linux, possibly other platforms.
 # See https://stackoverflow.com/questions/30312875/tkinter-winfo-screenwidth-when-used-with-dual-monitors/57866046#57866046
 class AWAfkPromptDialog(simpledialog.Dialog):
-    def __init__(self, title: str, prompt: str, history: list[str], afk_start=None, afk_duration_seconds=None, queue_info: dict | None = None) -> None:
+    def __init__(self, title: str, prompt: str, history: list[str], afk_start=None, afk_duration_seconds=None, queue_info: dict | None = None, is_ongoing: bool = False) -> None:
         self.prompt = prompt
         self.history = history
         self.history_index = len(history)
@@ -185,6 +185,7 @@ class AWAfkPromptDialog(simpledialog.Dialog):
         self.afk_duration_seconds = afk_duration_seconds
         self.split_mode = False  # Track if user wants split mode
         self.queue_info = queue_info  # dict with 'position', 'total', 'next_str' keys
+        self.is_ongoing = is_ongoing
         super().__init__(root, title)
 
     # @override (when we get to 3.12)
@@ -234,6 +235,13 @@ class AWAfkPromptDialog(simpledialog.Dialog):
 
         self.bind("<Control-comma>", self.open_config)
 
+        # Live duration label for ongoing AFK periods (updates every 10s)
+        if self.is_ongoing and self.afk_start is not None:
+            self._duration_var = tk.StringVar(value=self._make_duration_text())
+            duration_label = ttk.Label(master, textvariable=self._duration_var, justify=tk.LEFT)
+            duration_label.grid(row=2, padx=5, sticky=tk.W, columnspan=2)
+            self._live_timer = self.after(10_000, self._tick_duration)
+
         # Queue info label: shown when multiple AFK intervals are pending
         if self.queue_info:
             pos = self.queue_info["position"]
@@ -244,12 +252,27 @@ class AWAfkPromptDialog(simpledialog.Dialog):
             else:
                 queue_text = f"({pos} of {total}) — last interval"
             queue_label = ttk.Label(master, text=queue_text, foreground="gray", justify=tk.LEFT)
-            queue_label.grid(row=2, padx=5, sticky=tk.W, columnspan=2)
+            queue_label.grid(row=3, padx=5, sticky=tk.W, columnspan=2)
 
-        # Auto-snooze after 2 minutes if the dialog is ignored
-        self._timeout_id = self.after(120_000, self.cancel_with_snooze)
+        # Auto-snooze after 2 minutes if ignored — disabled for ongoing dialogs since
+        # the user hasn't returned yet and we want the dialog to be there when they do.
+        if not self.is_ongoing:
+            self._timeout_id = self.after(120_000, self.cancel_with_snooze)
 
         return self.entry
+
+    def _make_duration_text(self) -> str:
+        from datetime import UTC, datetime
+
+        from aw_watcher_afk_prompt.utils import format_duration
+
+        elapsed = datetime.now(UTC) - self.afk_start
+        return f"Time away so far: {format_duration(elapsed)} (updating...)"
+
+    def _tick_duration(self) -> None:
+        if hasattr(self, "_duration_var"):
+            self._duration_var.set(self._make_duration_text())
+            self._live_timer = self.after(10_000, self._tick_duration)
 
     def save_new_abbreviation(self, event=None, *, long: bool = False):  # noqa: ARG002
         if self.entry.selection_present():
@@ -360,6 +383,9 @@ class AWAfkPromptDialog(simpledialog.Dialog):
         if hasattr(self, "_timeout_id"):
             self.after_cancel(self._timeout_id)
             del self._timeout_id
+        if hasattr(self, "_live_timer"):
+            self.after_cancel(self._live_timer)
+            del self._live_timer
         self.withdraw()
         self.destroy()
 
@@ -525,6 +551,7 @@ def ask_string(
     afk_duration_seconds=None,
     initial_value: str | None = None,
     queue_info: dict | None = None,
+    is_ongoing: bool = False,
 ) -> str | None | tuple:
     """Ask for a string input, with optional split mode support.
 
@@ -544,7 +571,7 @@ def ask_string(
     # Loop to handle switching between single and split modes
     initial_text = initial_value
     while True:
-        d = AWAfkPromptDialog(title, prompt, history, afk_start, afk_duration_seconds, queue_info=queue_info)
+        d = AWAfkPromptDialog(title, prompt, history, afk_start, afk_duration_seconds, queue_info=queue_info, is_ongoing=is_ongoing)
 
         # Pre-fill with initial value or text from split mode
         if initial_text:
