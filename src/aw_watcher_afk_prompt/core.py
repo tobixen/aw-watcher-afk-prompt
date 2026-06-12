@@ -113,6 +113,21 @@ def is_afk(event: aw_core.Event) -> bool:
     return event.data["status"] in ("afk", "system-afk")
 
 
+def filter_lid_events_for_presence(lid_events: list[aw_core.Event]) -> list[aw_core.Event]:
+    """Keep only the AFK-ish lid events (lid closed / suspend).
+
+    aw-watcher-lid emits a "not-afk" event spanning the *entire* time the lid is
+    open, regardless of whether anyone is at the keyboard.  Treating that as
+    presence hides any AFK gap the event covers: once the open event is
+    finalized (on the next lid close) the gap disappears from the union of
+    not-afk events and is silently lost (observed 2026-06-11: a 29-minute away
+    period was masked by a 95-minute lid-open event and never prompted for).
+
+    Lid events may only ever *add* AFK evidence, never presence.
+    """
+    return [e for e in lid_events if is_afk(e)]
+
+
 def squash_overlaps(events: list[aw_core.Event]) -> list[aw_core.Event]:
     # Make a deep copy because the period_union function edits the events instead of returning new ones.
     return aw_transform.sort_by_timestamp(aw_transform.period_union(deepcopy(events), []))
@@ -174,10 +189,7 @@ def adjust_gap_start_for_window_activity(
 
     advance_seconds = (afk_event_start - gap_start).total_seconds()
     if advance_seconds > 0:
-        logger.info(
-            f"Advancing gap start by {advance_seconds:.0f}s "
-            f"(window activity present during idle countdown)"
-        )
+        logger.info(f"Advancing gap start by {advance_seconds:.0f}s (window activity present during idle countdown)")
     return aw_core.Event(None, afk_event_start, new_duration, gap.data)
 
 
@@ -464,7 +476,7 @@ class AWAfkPromptClient:
                     lid_events = self.client.get_events(self.lid_bucket_id, limit=fetch_limit, start=start_time)
                 except HTTPError:
                     logger.warning("Failed to get lid events, continuing with AFK events only")
-            all_events = aw_transform.sort_by_timestamp(afk_events + lid_events)
+            all_events = aw_transform.sort_by_timestamp(afk_events + filter_lid_events_for_presence(lid_events))
             logger.debug(
                 f"Time-bounded fetch: {len(all_events)} events since "
                 f"{start_time.astimezone(LOCAL_TIMEZONE).strftime('%Y-%m-%d %H:%M')}"
@@ -485,8 +497,8 @@ class AWAfkPromptClient:
                 except HTTPError:
                     logger.warning("Failed to get lid events, continuing with AFK events only")
 
-            # Merge and sort
-            all_events = aw_transform.sort_by_timestamp(afk_events + lid_events)
+            # Merge and sort (lid events only contribute AFK-ness, never presence)
+            all_events = aw_transform.sort_by_timestamp(afk_events + filter_lid_events_for_presence(lid_events))
 
             if not all_events:
                 return all_events, limit
@@ -529,6 +541,34 @@ class AWAfkPromptClient:
         if duration.total_seconds() < durration_thresh:
             return None
         return aw_core.Event(None, afk_start, duration, {"status": "afk", "ongoing": True})
+
+    def get_afk_period_end(
+        self, afk_start: datetime.datetime, min_not_afk_duration: float = 0.0
+    ) -> datetime.datetime | None:
+        """Return when the AFK period that began at ``afk_start`` actually ended.
+
+        The end is the start of the first not-afk event after ``afk_start``
+        (skipping blips shorter than ``min_not_afk_duration``, except the most
+        recent event, which is the "back at keyboard" signal and may still be
+        short).  Returns None when no such event is found (still AFK, or the
+        fetch failed) — callers should fall back to "now".
+        """
+        try:
+            all_events, _ = self._fetch_events_with_dynamic_limit()
+        except Exception:
+            logger.warning("Could not fetch events to determine AFK period end, falling back to now")
+            return None
+        if not all_events:
+            return None
+        last = all_events[-1]
+        candidates = [
+            e.timestamp
+            for e in all_events
+            if not is_afk(e)
+            and e.timestamp > afk_start
+            and (e.duration.total_seconds() >= min_not_afk_duration or e is last)
+        ]
+        return min(candidates) if candidates else None
 
     def get_new_afk_events_to_note(
         self,
@@ -716,15 +756,19 @@ class AWAfkPromptState:
                 f"  Gap: {gap.timestamp.astimezone(LOCAL_TIMEZONE).strftime('%H:%M:%S')} | {gap.duration.total_seconds():.1f}s"
             )
 
+        # Filter already-seen gaps BEFORE the window adjustment: stored seen events
+        # are the adjusted (shrunk) gaps and lie fully inside the raw gap, so the
+        # overlap check still matches — and we avoid re-adjusting (and re-logging
+        # "Advancing gap start") for gaps the user already answered, every poll.
+        pseudo_afk_events = [e for e in pseudo_afk_events if not self.has_event(e)]
+        logger.debug(f"Gaps after filtering seen: {len(pseudo_afk_events)}")
+
         # If window events are provided, advance each gap's start past the idle
         # countdown when window activity was present (fixes 2-min systematic overlap).
         if window_events:
             pseudo_afk_events = [
                 adjust_gap_start_for_window_activity(gap, events, window_events) for gap in pseudo_afk_events
             ]
-
-        pseudo_afk_events = [e for e in pseudo_afk_events if not self.has_event(e)]
-        logger.debug(f"Gaps after filtering seen: {len(pseudo_afk_events)}")
 
         # Re-present any gaps that previously expired from the depth window but were
         # never answered.  Purge ones that have since been answered (has_event → True).
