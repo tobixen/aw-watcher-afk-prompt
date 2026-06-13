@@ -1,7 +1,6 @@
 import json
 import logging
 import re
-import time
 import tkinter as tk
 from collections import UserDict
 from itertools import chain
@@ -16,6 +15,11 @@ logger = logging.getLogger(__name__)
 
 # How often the ongoing dialog polls the afk watcher to notice the user returned.
 _AFK_POLL_INTERVAL_MS = 5_000
+
+# A dialog left unanswered for this long auto-snoozes (closes without an answer;
+# the main loop suppresses further prompts for a while and re-asks later).
+# Any keypress in the dialog restarts the countdown.
+_AUTO_SNOOZE_MS = 120_000
 
 root = tk.Tk()
 root.withdraw()
@@ -180,7 +184,17 @@ abbreviations = _AbbreviationStore()
 # TODO: This widget pops up off-center when using multiple screes on Linux, possibly other platforms.
 # See https://stackoverflow.com/questions/30312875/tkinter-winfo-screenwidth-when-used-with-dual-monitors/57866046#57866046
 class AWAfkPromptDialog(simpledialog.Dialog):
-    def __init__(self, title: str, prompt: str, history: list[str], afk_start=None, afk_duration_seconds=None, queue_info: dict | None = None, is_ongoing: bool = False, still_afk_check=None) -> None:
+    def __init__(
+        self,
+        title: str,
+        prompt: str,
+        history: list[str],
+        afk_start=None,
+        afk_duration_seconds=None,
+        queue_info: dict | None = None,
+        is_ongoing: bool = False,
+        still_afk_check=None,
+    ) -> None:
         self.prompt = prompt
         self.history = history
         self.history_index = len(history)
@@ -271,9 +285,17 @@ class AWAfkPromptDialog(simpledialog.Dialog):
         # Auto-snooze after 2 minutes if ignored — disabled for ongoing dialogs since
         # the user hasn't returned yet and we want the dialog to be there when they do.
         if not self.is_ongoing:
-            self._timeout_id = self.after(120_000, self.cancel_with_snooze)
+            self._timeout_id = self.after(_AUTO_SNOOZE_MS, self.cancel_with_snooze)
+        # Typing counts as "answering": restart the auto-snooze countdown on each key.
+        self.bind("<KeyPress>", self._reset_auto_snooze, add="+")
 
         return self.entry
+
+    def _reset_auto_snooze(self, event=None) -> None:  # noqa: ARG002
+        """Restart the unanswered-too-long countdown (the user is typing)."""
+        if hasattr(self, "_timeout_id"):
+            self.after_cancel(self._timeout_id)
+            self._timeout_id = self.after(_AUTO_SNOOZE_MS, self.cancel_with_snooze)
 
     def _make_duration_text(self) -> str:
         from datetime import UTC, datetime
@@ -315,7 +337,7 @@ class AWAfkPromptDialog(simpledialog.Dialog):
         # The dialog's auto-snooze was disabled while the user was away; now that
         # they're back, arm it so the dialog doesn't sit forever if they wander off.
         if not hasattr(self, "_timeout_id"):
-            self._timeout_id = self.after(120_000, self.cancel_with_snooze)
+            self._timeout_id = self.after(_AUTO_SNOOZE_MS, self.cancel_with_snooze)
         # Freeze the live duration label (no more "updating...").
         if hasattr(self, "_duration_var") and self.afk_start is not None:
             from datetime import UTC, datetime
@@ -431,7 +453,7 @@ class AWAfkPromptDialog(simpledialog.Dialog):
 
     def validate(self):
         if not self.entry.get().strip():
-            # Empty Enter = snooze (same as Cancel)
+            # Empty Enter = snooze (same as the Snooze button)
             self.after(0, self.cancel_with_snooze)
             return False
         return True
@@ -463,12 +485,16 @@ class AWAfkPromptDialog(simpledialog.Dialog):
         self.destroy()
 
     def cancel_with_snooze(self, event=None):  # noqa: ARG002
-        """Cancel/timeout handler - closes dialog and waits 5 minutes before re-prompting."""
+        """Snooze: close the dialog without an answer.
+
+        The result stays None, which the main loop interprets as "leave me
+        alone for a while" — it suppresses further prompts for a few minutes
+        (without blocking the watcher) and re-asks later.
+        """
         if getattr(self, "_snoozing", False):
             return
         self._snoozing = True
         self.cancel()
-        time.sleep(300)
 
     def switch_to_split_mode(self):
         """Switch to split mode (close this dialog and open split dialog)."""
@@ -500,7 +526,9 @@ class AWAfkPromptDialog(simpledialog.Dialog):
 
         w = ttk.Button(box, text="OK", width=10, command=self.ok, default=tk.ACTIVE)
         w.pack(side=tk.LEFT, padx=5, pady=5)
-        w = ttk.Button(box, text="Cancel", width=10, command=self.cancel_with_snooze)
+        # "Snooze" (formerly "Cancel"): close without answering, re-ask later.
+        # Escape and an empty Enter do the same.
+        w = ttk.Button(box, text="Snooze", width=10, command=self.cancel_with_snooze)
         w.pack(side=tk.LEFT, padx=5, pady=5)
 
         # Unknown button - quick dismiss for forgotten activities (Ctrl-U)
@@ -659,7 +687,16 @@ def ask_string(
     # Loop to handle switching between single and split modes
     initial_text = initial_value
     while True:
-        d = AWAfkPromptDialog(title, prompt, history, afk_start, afk_duration_seconds, queue_info=queue_info, is_ongoing=is_ongoing, still_afk_check=still_afk_check)
+        d = AWAfkPromptDialog(
+            title,
+            prompt,
+            history,
+            afk_start,
+            afk_duration_seconds,
+            queue_info=queue_info,
+            is_ongoing=is_ongoing,
+            still_afk_check=still_afk_check,
+        )
 
         # Pre-fill with initial value or text from split mode
         if initial_text:

@@ -22,6 +22,7 @@ def _fake_state() -> SimpleNamespace:
         state=SimpleNamespace(recent_events=[]),
         post_event=MagicMock(),
         post_split_events=MagicMock(),
+        get_afk_period_end=MagicMock(return_value=None),
     )
 
 
@@ -32,7 +33,7 @@ class TestProcessEvents:
 
         def fake_prompt(event, recent_events, queue_info=None, stale_minutes=15.0):  # noqa: ARG001
             seen_timestamps.append(event.timestamp)
-            return None  # cancelled — keeps the test focused on ordering
+            return "x"  # answered — a None (snooze) would stop the queue
 
         monkeypatch.setattr(main, "prompt", fake_prompt)
 
@@ -49,7 +50,7 @@ class TestProcessEvents:
         def fake_prompt(event, recent_events, queue_info=None, stale_minutes=15.0):  # noqa: ARG001
             assert queue_info is not None
             positions.append((queue_info["position"], queue_info["total"]))
-            return None
+            return "x"
 
         monkeypatch.setattr(main, "prompt", fake_prompt)
 
@@ -64,7 +65,7 @@ class TestProcessEvents:
 
         def fake_prompt(event, recent_events, queue_info=None, stale_minutes=15.0):  # noqa: ARG001
             captured.append(queue_info)
-            return None
+            return "x"
 
         monkeypatch.setattr(main, "prompt", fake_prompt)
 
@@ -72,7 +73,7 @@ class TestProcessEvents:
 
         assert captured == [None]
 
-    def test_dispatch_normal_split_and_cancel(self, monkeypatch) -> None:
+    def test_dispatch_normal_split_and_snooze(self, monkeypatch) -> None:
         """String -> post_event, SPLIT_MODE tuple -> post_split_events, None -> neither."""
         events = [_event(10), _event(20), _event(30)]
         responses = {10: "reading", 20: ("SPLIT_MODE", ["a", "b"]), 30: None}
@@ -83,12 +84,36 @@ class TestProcessEvents:
         monkeypatch.setattr(main, "prompt", fake_prompt)
 
         state = _fake_state()
-        main._process_events(state, events, context="Test")
+        snoozed = main._process_events(state, events, context="Test")
 
+        assert snoozed is True  # last prompt returned None
         assert state.post_event.call_count == 1
         assert state.post_event.call_args.args[1] == "reading"
         assert state.post_split_events.call_count == 1
         assert state.post_split_events.call_args.args[1] == ["a", "b"]
+
+    def test_snooze_stops_the_queue(self, monkeypatch) -> None:
+        """A snoozed (None) prompt must stop the queue — the user asked to be left alone.
+
+        The remaining periods are not lost: they are unanswered and will be
+        re-found by the next deep scan once the snooze suppression expires.
+        """
+        prompted: list[int] = []
+
+        def fake_prompt(event, recent_events, queue_info=None, stale_minutes=15.0):  # noqa: ARG001
+            prompted.append(event.timestamp.minute)
+            return None  # snooze on the very first prompt
+
+        monkeypatch.setattr(main, "prompt", fake_prompt)
+
+        snoozed = main._process_events(_fake_state(), [_event(10), _event(20), _event(30)], context="Test")
+
+        assert snoozed is True
+        assert prompted == [10], "no further prompts after a snooze"
+
+    def test_all_answered_returns_false(self, monkeypatch) -> None:
+        monkeypatch.setattr(main, "prompt", lambda *a, **k: "x")
+        assert main._process_events(_fake_state(), [_event(10), _event(20)], context="Test") is False
 
     def test_stale_minutes_threads_through_to_prompt(self, monkeypatch) -> None:
         """_process_events must pass its stale_minutes down to each prompt."""
@@ -145,6 +170,20 @@ class TestPostOngoingResponse:
         assert posted_event.timestamp == ongoing.timestamp
         assert posted_event.duration.total_seconds() > 60
 
+    def test_plain_string_uses_actual_return_time_when_known(self) -> None:
+        """The posted duration must end when the afk watcher saw the user return,
+        not when they got around to clicking OK (possibly minutes later)."""
+        state = _fake_state()
+        ongoing = self._ongoing()
+        returned_at = ongoing.timestamp + timedelta(minutes=20)
+        state.get_afk_period_end = MagicMock(return_value=returned_at)
+
+        main._post_ongoing_response(state, ongoing, "writing code")
+
+        posted_event, _ = state.post_event.call_args.args
+        assert posted_event.timestamp == ongoing.timestamp
+        assert posted_event.duration == timedelta(minutes=20)
+
     def test_split_mode_routes_to_post_split_events(self) -> None:
         state = _fake_state()
         ongoing = self._ongoing()
@@ -173,6 +212,34 @@ class TestPromptOngoing:
         assert captured["is_ongoing"] is True
         assert captured["still_afk_check"] is sentinel
         assert captured["afk_duration_seconds"] is None
+
+    def test_pending_count_hint_in_prompt_text(self, monkeypatch) -> None:
+        """When earlier unfilled periods exist, the ongoing dialog must say so."""
+        captured: dict[str, str] = {}
+
+        def fake_ask_string(title, prompt_text, history, **kwargs):  # noqa: ARG001
+            captured["text"] = prompt_text
+            return None
+
+        monkeypatch.setattr(main.aw_dialog, "ask_string", fake_ask_string)
+
+        ongoing = aw_core.Event(id=None, timestamp=datetime.now(UTC) - timedelta(minutes=5), duration=timedelta(0))
+        main.prompt_ongoing(ongoing, [], pending_count=3)
+        assert "3" in captured["text"]
+        assert "period" in captured["text"].lower()
+
+    def test_no_pending_hint_when_nothing_pending(self, monkeypatch) -> None:
+        captured: dict[str, str] = {}
+
+        def fake_ask_string(title, prompt_text, history, **kwargs):  # noqa: ARG001
+            captured["text"] = prompt_text
+            return None
+
+        monkeypatch.setattr(main.aw_dialog, "ask_string", fake_ask_string)
+
+        ongoing = aw_core.Event(id=None, timestamp=datetime.now(UTC) - timedelta(minutes=5), duration=timedelta(0))
+        main.prompt_ongoing(ongoing, [], pending_count=0)
+        assert "pending" not in captured["text"].lower()
 
 
 class TestPromptStaleThreshold:

@@ -21,6 +21,11 @@ from aw_watcher_afk_prompt.core import (
 )
 from aw_watcher_afk_prompt.utils import format_age, format_duration, format_time_local
 
+# After the user snoozes a dialog (Snooze button, Escape, empty Enter, timeout,
+# or closing the window), no new prompts are shown for this long. The watcher
+# keeps scanning in the meantime, so nothing is lost — just not asked about yet.
+SNOOZE_SECONDS = 300
+
 
 def prompt(
     event: aw_core.Event,
@@ -40,8 +45,7 @@ def prompt(
         stale_threshold=timedelta(minutes=stale_minutes),
     )
     prompt_text = (
-        f"What were you doing from {start_time_str} - {end_time_str} "
-        f"({format_duration(event.duration)})?\n{age_str}"
+        f"What were you doing from {start_time_str} - {end_time_str} ({format_duration(event.duration)})?\n{age_str}"
     )
     title = "AFK Checkin"
 
@@ -60,6 +64,7 @@ def prompt_ongoing(
     event: aw_core.Event,
     recent_events,
     still_afk_check=None,
+    pending_count: int = 0,
 ) -> str | None:
     """Show a live-updating dialog for an AFK period that is still in progress.
 
@@ -68,9 +73,15 @@ def prompt_ongoing(
     user returned (via the OS afk watcher) and freeze itself, even before they
     type anything.  The auto-snooze timeout is disabled while still away so the
     dialog persists until the user sits down.
+
+    ``pending_count`` is the number of *earlier* unfilled AFK periods found by
+    the deep scan; when nonzero the dialog warns that more answers are needed.
     """
     start_time_str = format_time_local(event.timestamp)
     prompt_text = f"What were you doing from {start_time_str}? (still AFK)"
+    if pending_count:
+        plural = "s" if pending_count != 1 else ""
+        prompt_text += f"\n⚠️ {pending_count} earlier unfilled AFK period{plural} pending — asked next."
     return aw_dialog.ask_string(
         "AFK Checkin (ongoing)",
         prompt_text,
@@ -105,30 +116,34 @@ def _deep_scan(state: AWAfkPromptClient, args) -> list[aw_core.Event]:
 
 def _process_events(
     state: AWAfkPromptClient, events: list[aw_core.Event], *, context: str, stale_minutes: float = 15.0
-) -> None:
+) -> bool:
     """Prompt the user for each unfilled AFK period, oldest first.
 
     Each prompt carries queue info ("(N of total) — next: …") so the user can see
-    how many more periods remain to be backfilled. Cancelled prompts are skipped,
-    split responses are posted as multiple activities, and normal responses are
-    posted as a single event.
+    how many more periods remain to be backfilled. Split responses are posted as
+    multiple activities, and normal responses are posted as a single event.
+
+    A snoozed prompt (None) stops the queue: the remaining periods stay
+    unanswered and will be re-found by the next deep scan. Returns True when the
+    user snoozed, so the caller can suppress prompts for SNOOZE_SECONDS.
     """
     events = sorted(events, key=lambda e: e.timestamp)
     if not events:
-        return
+        return False
     logger.info(f"{context}: {len(events)} unfilled AFK period(s) to prompt")
     for i, event in enumerate(events):
         response = prompt(
             event, state.state.recent_events, queue_info=_build_queue_info(events, i), stale_minutes=stale_minutes
         )
         if response is None:
-            # User cancelled/snoozed
+            remaining = len(events) - i
             logger.info(
-                f"Dialog cancelled for gap at "
+                f"Dialog snoozed for gap at "
                 f"{format_time_local(event.timestamp)}-{format_time_local(event.timestamp + event.duration)} "
-                f"({format_duration(event.duration)})"
+                f"({format_duration(event.duration)}) — suppressing prompts for {SNOOZE_SECONDS // 60} minutes, "
+                f"{remaining} period(s) left for the next scan"
             )
-            continue
+            return True
         elif isinstance(response, tuple) and response[0] == "SPLIT_MODE":
             activities = response[1]
             logger.info(f"Posting {len(activities)} split activities")
@@ -136,13 +151,17 @@ def _process_events(
         else:
             logger.info(response)
             state.post_event(event, response)
+    return False
 
 
-def _post_ongoing_response(state: AWAfkPromptClient, ongoing: aw_core.Event, response) -> None:
+def _post_ongoing_response(state: AWAfkPromptClient, ongoing: aw_core.Event, response, min_active: float = 0.0) -> None:
     """Dispatch the result of the live 'still AFK' dialog.
 
-    The AFK period is assumed to end the moment the user answers (types text or
-    clicks Split), so the single-event path stamps a duration of start..now.
+    The single-event path stamps the period as start..return, where the return
+    time is taken from the afk watcher (start of the first not-afk event after
+    the period began, ignoring blips shorter than ``min_active``). If that can't
+    be determined, fall back to "now" — the user may have answered minutes after
+    actually sitting down, so "now" can overstate the duration.
     Split results carry their own per-activity timestamps already.
     """
     if response is None:
@@ -154,8 +173,10 @@ def _post_ongoing_response(state: AWAfkPromptClient, ongoing: aw_core.Event, res
         logger.info(f"Posting {len(activities)} split activities")
         state.post_split_events(ongoing, activities)
     else:
-        actual_duration = datetime.now(UTC) - ongoing.timestamp
-        actual_event = aw_core.Event(None, ongoing.timestamp, actual_duration)
+        end = state.get_afk_period_end(ongoing.timestamp, min_active)
+        if end is None or end <= ongoing.timestamp:
+            end = datetime.now(UTC)
+        actual_event = aw_core.Event(None, ongoing.timestamp, end - ongoing.timestamp)
         state.post_event(actual_event, response)
 
 
@@ -437,7 +458,9 @@ def main() -> None:
             # Backfill mode: on startup, prompt for old unfilled AFK periods.
             # last_deep_scan tracks when we last did a full backfill-depth lookup so the
             # normal loop can repeat it periodically (see DEEP_SCAN_INTERVAL_SECONDS).
+            # snoozed_until: no prompts before this time (the watcher keeps scanning).
             last_deep_scan = 0.0
+            snoozed_until = 0.0
             if args.backfill:
                 logger.info(f"Backfill mode enabled, looking back {args.backfill_depth} minutes")
                 try:
@@ -445,9 +468,10 @@ def main() -> None:
                 except (ConnectionError, HTTPError) as e:
                     logger.warning(f"Backfill failed due to server error: {e}")
                     backfill_events = []
-                _process_events(
+                if _process_events(
                     state, backfill_events, context="Startup backfill", stale_minutes=args.stale_warning
-                )
+                ):
+                    snoozed_until = time.monotonic() + SNOOZE_SECONDS
                 last_deep_scan = time.monotonic()
 
             if args.backfill_only:
@@ -465,24 +489,44 @@ def main() -> None:
                 try:
                     # Shallow real-time scan (small depth window) for responsiveness:
                     # catches a just-finished AFK period within one poll interval.
-                    shallow = list(state.get_new_afk_events_to_note(
-                        seconds=args.depth * 60,
-                        durration_thresh=args.length * 60,
-                        min_not_afk_duration=args.min_active,
-                    ))
+                    shallow = list(
+                        state.get_new_afk_events_to_note(
+                            seconds=args.depth * 60,
+                            durration_thresh=args.length * 60,
+                            min_not_afk_duration=args.min_active,
+                        )
+                    )
 
-                    if not shallow:
+                    prompts_allowed = time.monotonic() >= snoozed_until
+
+                    if not shallow and prompts_allowed:
                         # Still AFK (or nothing to do) — check if we should show a
                         # pre-emptive live dialog before the user sits back down.
                         ongoing = state.get_ongoing_afk_event(args.length * 60)
                         if ongoing and ongoing.timestamp != prompted_ongoing_start:
+                            # Verify against the full backfill window first, so the
+                            # dialog can warn about earlier periods awaiting answers.
+                            pending_count = 0
+                            if args.backfill:
+                                try:
+                                    pending_count = len(_deep_scan(state, args))
+                                except (ConnectionError, HTTPError) as e:
+                                    logger.warning(f"Pending-period check failed: {e}")
                             prompted_ongoing_start = ongoing.timestamp
                             response = prompt_ongoing(
                                 ongoing,
                                 state.state.recent_events,
                                 still_afk_check=lambda: state.get_ongoing_afk_event(args.length * 60) is not None,
+                                pending_count=pending_count,
                             )
-                            _post_ongoing_response(state, ongoing, response)
+                            _post_ongoing_response(state, ongoing, response, min_active=args.min_active)
+                            if response is None:
+                                snoozed_until = time.monotonic() + SNOOZE_SECONDS
+                                prompts_allowed = False
+                            # The dialog may have been open for a long time; force a
+                            # deep scan so periods that finished meanwhile (or were
+                            # pending already) are prompted right away.
+                            last_deep_scan = 0.0
 
                     # Trigger a full deep (backfill-depth) scan either on a ~10-minute
                     # cadence or immediately before prompting (when the shallow scan found
@@ -490,12 +534,19 @@ def main() -> None:
                     # list we actually prompt from, so periods that slipped out of the
                     # shallow window are picked up without waiting for a restart.
                     due_for_deep = (time.monotonic() - last_deep_scan) >= deep_scan_interval
-                    if args.backfill and (shallow or due_for_deep):
-                        pending = _deep_scan(state, args)
-                        last_deep_scan = time.monotonic()
-                        _process_events(state, pending, context="Backfill scan", stale_minutes=args.stale_warning)
-                    else:
-                        _process_events(state, shallow, context="AFK check", stale_minutes=args.stale_warning)
+                    if prompts_allowed:
+                        if args.backfill and (shallow or due_for_deep):
+                            pending = _deep_scan(state, args)
+                            last_deep_scan = time.monotonic()
+                            snoozed = _process_events(
+                                state, pending, context="Backfill scan", stale_minutes=args.stale_warning
+                            )
+                        else:
+                            snoozed = _process_events(
+                                state, shallow, context="AFK check", stale_minutes=args.stale_warning
+                            )
+                        if snoozed:
+                            snoozed_until = time.monotonic() + SNOOZE_SECONDS
                     # Poll succeeded — reset server down tracking
                     if server_down_since is not None:
                         logger.info("Server connection restored.")
