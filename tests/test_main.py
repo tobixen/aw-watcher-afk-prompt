@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import aw_core
+import pytest
 
 import aw_watcher_afk_prompt.__main__ as main
 from aw_watcher_afk_prompt.utils import WARNING_SYMBOL
@@ -213,33 +214,126 @@ class TestPromptOngoing:
         assert captured["still_afk_check"] is sentinel
         assert captured["afk_duration_seconds"] is None
 
-    def test_pending_count_hint_in_prompt_text(self, monkeypatch) -> None:
-        """When earlier unfilled periods exist, the ongoing dialog must say so."""
-        captured: dict[str, str] = {}
 
-        def fake_ask_string(title, prompt_text, history, **kwargs):  # noqa: ARG001
-            captured["text"] = prompt_text
-            return None
+class TestHandleStillAfk:
+    """When the shallow scan finds nothing (user still AFK), earlier *completed*
+    unfilled periods must be asked about oldest-first, before the live 'still
+    AFK' dialog for the just-started period — so the user always answers the
+    oldest interval first, not the most recent one."""
 
-        monkeypatch.setattr(main.aw_dialog, "ask_string", fake_ask_string)
+    def _args(self, *, backfill: bool = True) -> SimpleNamespace:
+        return SimpleNamespace(backfill=backfill, length=5.0, stale_warning=15.0, min_active=0.0)
 
-        ongoing = aw_core.Event(id=None, timestamp=datetime.now(UTC) - timedelta(minutes=5), duration=timedelta(0))
-        main.prompt_ongoing(ongoing, [], pending_count=3)
-        assert "3" in captured["text"]
-        assert "period" in captured["text"].lower()
+    def _ongoing_event(self, minute: int = 57) -> aw_core.Event:
+        ts = datetime(2026, 6, 7, 11, minute, 0, tzinfo=UTC)
+        return aw_core.Event(id=None, timestamp=ts, duration=timedelta(0))
 
-    def test_no_pending_hint_when_nothing_pending(self, monkeypatch) -> None:
-        captured: dict[str, str] = {}
+    def _state_with_ongoing(self, ongoing) -> SimpleNamespace:
+        state = _fake_state()
+        state.get_ongoing_afk_event = MagicMock(return_value=ongoing)
+        return state
 
-        def fake_ask_string(title, prompt_text, history, **kwargs):  # noqa: ARG001
-            captured["text"] = prompt_text
-            return None
+    def test_completed_periods_prompted_before_ongoing(self, monkeypatch) -> None:
+        ongoing = self._ongoing_event()
+        state = self._state_with_ongoing(ongoing)
+        pending = [_event(10), _event(20)]
+        monkeypatch.setattr(main, "_deep_scan", lambda s, a: pending)  # noqa: ARG005
+        processed: dict = {}
 
-        monkeypatch.setattr(main.aw_dialog, "ask_string", fake_ask_string)
+        def fake_process(s, events, context, stale_minutes=15.0):  # noqa: ARG001
+            processed["events"] = events
+            return False
 
-        ongoing = aw_core.Event(id=None, timestamp=datetime.now(UTC) - timedelta(minutes=5), duration=timedelta(0))
-        main.prompt_ongoing(ongoing, [], pending_count=0)
-        assert "pending" not in captured["text"].lower()
+        monkeypatch.setattr(main, "_process_events", fake_process)
+        ongoing_shown: list = []
+        monkeypatch.setattr(main, "prompt_ongoing", lambda *a, **k: ongoing_shown.append(True))
+        monkeypatch.setattr(main, "_post_ongoing_response", lambda *a, **k: None)
+
+        result = main._handle_still_afk(state, self._args(), prompted_ongoing_start=None)
+
+        assert processed["events"] == pending, "earlier completed periods are prompted"
+        assert ongoing_shown == [], "live dialog NOT shown while earlier periods are pending"
+        # Leave prompted_ongoing_start untouched so the live dialog still appears
+        # once the earlier periods have been cleared.
+        assert result.prompted_ongoing_start is None
+        assert result.snoozed is False
+        assert result.deep_scan == "now", "we just ran a fresh deep scan"
+
+    def test_ongoing_shown_when_no_completed_pending(self, monkeypatch) -> None:
+        ongoing = self._ongoing_event()
+        state = self._state_with_ongoing(ongoing)
+        monkeypatch.setattr(main, "_deep_scan", lambda s, a: [])  # noqa: ARG005
+        monkeypatch.setattr(
+            main, "_process_events", lambda *a, **k: pytest.fail("should not prompt completed periods")
+        )
+        shown: dict = {}
+
+        def fake_ongoing(event, recent_events, still_afk_check=None):  # noqa: ARG001
+            shown["event"] = event
+            return "answer"
+
+        monkeypatch.setattr(main, "prompt_ongoing", fake_ongoing)
+        posted: dict = {}
+        monkeypatch.setattr(
+            main, "_post_ongoing_response", lambda s, o, r, min_active=0.0: posted.update(r=r)  # noqa: ARG005
+        )
+
+        result = main._handle_still_afk(state, self._args(), prompted_ongoing_start=None)
+
+        assert shown["event"] is ongoing
+        assert posted["r"] == "answer"
+        assert result.prompted_ongoing_start == ongoing.timestamp
+        assert result.snoozed is False
+        assert result.deep_scan == "reset", "force a deep scan next loop after the live dialog closes"
+
+    def test_noop_when_not_afk(self, monkeypatch) -> None:
+        state = self._state_with_ongoing(None)
+        monkeypatch.setattr(main, "_deep_scan", lambda *a: pytest.fail("no scan when not AFK"))
+        result = main._handle_still_afk(state, self._args(), prompted_ongoing_start=None)
+        assert result.prompted_ongoing_start is None
+        assert result.snoozed is False
+        assert result.deep_scan == "keep"
+
+    def test_noop_when_ongoing_already_prompted(self, monkeypatch) -> None:
+        ongoing = self._ongoing_event()
+        state = self._state_with_ongoing(ongoing)
+        scanned: list = []
+        monkeypatch.setattr(main, "_deep_scan", lambda *a: scanned.append("scan") or [])
+        result = main._handle_still_afk(state, self._args(), prompted_ongoing_start=ongoing.timestamp)
+        assert result.deep_scan == "keep"
+        assert scanned == [], "neither scan nor prompt for an already-shown ongoing period"
+
+    def test_snooze_on_completed_propagates(self, monkeypatch) -> None:
+        ongoing = self._ongoing_event()
+        state = self._state_with_ongoing(ongoing)
+        monkeypatch.setattr(main, "_deep_scan", lambda s, a: [_event(10)])  # noqa: ARG005
+        monkeypatch.setattr(main, "_process_events", lambda *a, **k: True)  # user snoozed
+        monkeypatch.setattr(main, "prompt_ongoing", lambda *a, **k: pytest.fail("no live dialog after snooze"))
+        result = main._handle_still_afk(state, self._args(), prompted_ongoing_start=None)
+        assert result.snoozed is True
+        assert result.deep_scan == "now"
+
+    def test_snooze_on_ongoing_propagates(self, monkeypatch) -> None:
+        ongoing = self._ongoing_event()
+        state = self._state_with_ongoing(ongoing)
+        monkeypatch.setattr(main, "_deep_scan", lambda s, a: [])  # noqa: ARG005
+        monkeypatch.setattr(main, "prompt_ongoing", lambda *a, **k: None)  # snooze
+        monkeypatch.setattr(main, "_post_ongoing_response", lambda *a, **k: None)
+        result = main._handle_still_afk(state, self._args(), prompted_ongoing_start=None)
+        assert result.snoozed is True
+        assert result.prompted_ongoing_start == ongoing.timestamp
+        assert result.deep_scan == "reset"
+
+    def test_no_backfill_shows_ongoing_directly(self, monkeypatch) -> None:
+        ongoing = self._ongoing_event()
+        state = self._state_with_ongoing(ongoing)
+        monkeypatch.setattr(main, "_deep_scan", lambda *a: pytest.fail("no scan when backfill disabled"))
+        shown: list = []
+        monkeypatch.setattr(main, "prompt_ongoing", lambda *a, **k: shown.append(True))
+        monkeypatch.setattr(main, "_post_ongoing_response", lambda *a, **k: None)
+        result = main._handle_still_afk(state, self._args(backfill=False), prompted_ongoing_start=None)
+        assert shown == [True]
+        assert result.deep_scan == "reset"
 
 
 class TestPromptStaleThreshold:

@@ -15,14 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- The **Cancel button is now called Snooze**, which is what it always did: close the dialog without an answer and re-ask later. Escape, an empty Enter, and leaving the dialog unanswered for 2 minutes do the same.
+- The **Cancel button is now called Snooze**, which is what it always did: close the dialog without an answer and re-ask later. Escape and an empty Enter do the same. An unanswered dialog now stays open until you act on it — there is no longer a timeout that auto-snoozes it, so a prompt can no longer be silently lost while you are away.
 - Snoozing no longer blocks the whole watcher in a 5-minute `time.sleep`. Instead, prompts are suppressed for 5 minutes while scanning continues in the background, so AFK periods that begin or end during the snooze are still tracked.
 - Snoozing a prompt now also stops the rest of the prompt queue (previously the next queued dialog popped up immediately after the 5-minute freeze). The remaining periods are re-presented after the snooze expires.
 
 ### Added
 
-- Typing in a prompt restarts the 2-minute auto-snooze countdown, so the dialog no longer vanishes mid-sentence.
-- The live "still AFK" dialog now checks the full backfill window first and warns when earlier unfilled AFK periods are pending (e.g. "⚠️ 2 earlier unfilled AFK periods pending — asked next"), and a verification deep scan runs immediately after the dialog closes so those periods are prompted for right away.
+- Earlier unfilled AFK periods are now always prompted oldest-first, even while you are still away. When the live "still AFK" dialog would otherwise appear, the full backfill window is scanned first; any earlier *completed* periods are asked about oldest-first (each with "(N of total) — next: …" queue info), and the live dialog for the still-running period is shown only once those are cleared. Previously the live dialog appeared first (anchored at your most recent brief touch) and merely warned that earlier periods were pending.
 
 - A live-updating check-in dialog can now appear *before* you return to the computer, showing a ticking "time away so far" counter for the ongoing AFK period. It offers the same Split button as the normal prompt (clicking Split assumes the period ends now). When you come back — either by typing into the dialog or by the OS afk watcher detecting activity, even without touching the dialog — it freezes the counter and drops the "still AFK" wording.
 - The full backfill-depth (e.g. 24 h) scan now also runs during normal operation — on a ~10-minute cadence (configurable via `backfill_interval`) and immediately before prompting — instead of only at startup. Missed AFK periods are picked up within ~10 minutes rather than waiting for the next restart. Prompts are always shown oldest-first with queue info ("(N of total) — next: …") so it's clear when more periods remain to be backfilled.

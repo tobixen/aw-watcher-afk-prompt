@@ -16,11 +16,6 @@ logger = logging.getLogger(__name__)
 # How often the ongoing dialog polls the afk watcher to notice the user returned.
 _AFK_POLL_INTERVAL_MS = 5_000
 
-# A dialog left unanswered for this long auto-snoozes (closes without an answer;
-# the main loop suppresses further prompts for a while and re-asks later).
-# Any keypress in the dialog restarts the countdown.
-_AUTO_SNOOZE_MS = 120_000
-
 root = tk.Tk()
 root.withdraw()
 
@@ -282,20 +277,9 @@ class AWAfkPromptDialog(simpledialog.Dialog):
             queue_label = ttk.Label(master, text=queue_text, foreground="gray", justify=tk.LEFT)
             queue_label.grid(row=3, padx=5, sticky=tk.W, columnspan=2)
 
-        # Auto-snooze after 2 minutes if ignored — disabled for ongoing dialogs since
-        # the user hasn't returned yet and we want the dialog to be there when they do.
-        if not self.is_ongoing:
-            self._timeout_id = self.after(_AUTO_SNOOZE_MS, self.cancel_with_snooze)
-        # Typing counts as "answering": restart the auto-snooze countdown on each key.
-        self.bind("<KeyPress>", self._reset_auto_snooze, add="+")
-
+        # No auto-snooze: an unanswered dialog stays put until the user answers or
+        # snoozes it explicitly, so a prompt is never silently lost while they are away.
         return self.entry
-
-    def _reset_auto_snooze(self, event=None) -> None:  # noqa: ARG002
-        """Restart the unanswered-too-long countdown (the user is typing)."""
-        if hasattr(self, "_timeout_id"):
-            self.after_cancel(self._timeout_id)
-            self._timeout_id = self.after(_AUTO_SNOOZE_MS, self.cancel_with_snooze)
 
     def _make_duration_text(self) -> str:
         from datetime import UTC, datetime
@@ -334,10 +318,6 @@ class AWAfkPromptDialog(simpledialog.Dialog):
         if hasattr(self, "_afk_poll_timer"):
             self.after_cancel(self._afk_poll_timer)
             del self._afk_poll_timer
-        # The dialog's auto-snooze was disabled while the user was away; now that
-        # they're back, arm it so the dialog doesn't sit forever if they wander off.
-        if not hasattr(self, "_timeout_id"):
-            self._timeout_id = self.after(_AUTO_SNOOZE_MS, self.cancel_with_snooze)
         # Freeze the live duration label (no more "updating...").
         if hasattr(self, "_duration_var") and self.afk_start is not None:
             from datetime import UTC, datetime
@@ -472,9 +452,6 @@ class AWAfkPromptDialog(simpledialog.Dialog):
     def cancel(self, event=None):  # noqa: ARG002
         # Call withdraw first because it is faster.
         # The process should wait on the destroy instead of the human.
-        if hasattr(self, "_timeout_id"):
-            self.after_cancel(self._timeout_id)
-            del self._timeout_id
         if hasattr(self, "_live_timer"):
             self.after_cancel(self._live_timer)
             del self._live_timer
@@ -505,9 +482,6 @@ class AWAfkPromptDialog(simpledialog.Dialog):
             from datetime import UTC, datetime
 
             self.afk_duration_seconds = (datetime.now(UTC) - self.afk_start).total_seconds()
-        if hasattr(self, "_timeout_id"):
-            self.after_cancel(self._timeout_id)
-            del self._timeout_id
         if hasattr(self, "_live_timer"):
             self.after_cancel(self._live_timer)
             del self._live_timer
