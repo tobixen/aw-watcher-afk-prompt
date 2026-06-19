@@ -187,9 +187,8 @@ def adjust_gap_start_for_window_activity(
     if new_duration.total_seconds() <= 0:
         return gap
 
-    advance_seconds = (afk_event_start - gap_start).total_seconds()
-    if advance_seconds > 0:
-        logger.info(f"Advancing gap start by {advance_seconds:.0f}s (window activity present during idle countdown)")
+    # The caller logs the advance (deduped per gap) — keeping it out of this pure
+    # function avoids re-logging at INFO on every poll for a still-pending gap.
     return aw_core.Event(None, afk_event_start, new_duration, gap.data)
 
 
@@ -641,6 +640,9 @@ class AWAfkPromptState:
         # Kept in memory so they are re-presented the next time the user is at the
         # keyboard, rather than being silently discarded.
         self._deferred: list[aw_core.Event] = []
+        # AFK-event starts for which we've already logged a gap-start advance, so a
+        # still-pending gap doesn't re-log "Advancing gap start" at INFO every poll.
+        self._logged_advances: set[datetime.datetime] = set()
 
     def has_event(self, new: aw_core.Event, overlap_thresh: float = 0.95) -> bool:
         """Check whether we have already posted an event that overlaps with the new event.
@@ -766,9 +768,26 @@ class AWAfkPromptState:
         # If window events are provided, advance each gap's start past the idle
         # countdown when window activity was present (fixes 2-min systematic overlap).
         if window_events:
-            pseudo_afk_events = [
-                adjust_gap_start_for_window_activity(gap, events, window_events) for gap in pseudo_afk_events
-            ]
+            adjusted: list[aw_core.Event] = []
+            logged_now: set[datetime.datetime] = set()
+            for gap in pseudo_afk_events:
+                new_gap = adjust_gap_start_for_window_activity(gap, events, window_events)
+                advance = (new_gap.timestamp - gap.timestamp).total_seconds()
+                if advance > 0:
+                    # Key on the advanced start (== the real AFK event start), which is
+                    # stable across polls — the raw gap start jitters with heartbeats.
+                    # Log INFO once per pending gap, DEBUG on repeats.
+                    msg = f"Advancing gap start by {advance:.0f}s (window activity present during idle countdown)"
+                    logged_now.add(new_gap.timestamp)
+                    if new_gap.timestamp in self._logged_advances:
+                        logger.debug(msg)
+                    else:
+                        logger.info(msg)
+                adjusted.append(new_gap)
+            # Keep only currently-pending advanced gaps so the set stays bounded and a
+            # gap that disappears then reappears is logged afresh.
+            self._logged_advances = logged_now
+            pseudo_afk_events = adjusted
 
         # Re-present any gaps that previously expired from the depth window but were
         # never answered.  Purge ones that have since been answered (has_event → True).

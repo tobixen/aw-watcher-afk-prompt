@@ -338,6 +338,38 @@ def test_get_unseen_afk_events_with_window_advances_gap_start():
     assert int(unseen[0].duration.total_seconds()) == 360
 
 
+def test_advance_gap_logged_once_across_polls(caplog):
+    """The 'Advancing gap start' INFO line is logged once per gap, not every poll.
+
+    Regression: a still-pending gap was re-adjusted and re-logged at INFO on every
+    poll (~every 5 s), flooding the log. It should log INFO once per distinct gap,
+    then DEBUG on repeats, keyed on the advanced start (the stable AFK-event start).
+    """
+    import logging
+
+    afk_events = [
+        _tuple_to_event(t)
+        for t in [
+            (0, 120, NOT_AFK),
+            (240, 360, AFK),
+            (600, 60, NOT_AFK),
+        ]
+    ]
+    window_events = [_make_window_event(120, 120)]
+    state = AWAfkPromptState([])
+
+    with caplog.at_level(logging.DEBUG, logger="aw_watcher_afk_prompt.core"):
+        for _ in range(3):
+            advanced = list(state.get_unseen_afk_events(afk_events, INF, 300, window_events))
+            # The gap is still advanced on every poll, only the logging is deduped.
+            assert advanced[0].timestamp == FIRST_DATE + datetime.timedelta(seconds=240)
+
+    advance_infos = [
+        r for r in caplog.records if r.levelno == logging.INFO and "Advancing gap start" in r.getMessage()
+    ]
+    assert len(advance_infos) == 1, f"expected 1 INFO advance log across 3 polls, got {len(advance_infos)}"
+
+
 def test_get_unseen_afk_events_no_window_param_unchanged():
     """Without window events, get_unseen_afk_events behaves as before (no regression)."""
     afk_events = [

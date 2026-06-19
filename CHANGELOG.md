@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **AFK periods could be silently lost when the laptop lid was open**: aw-watcher-lid posts a single "not-afk" event spanning the entire lid-open period, regardless of whether anyone is at the keyboard. Once such an event was finalized (on the next lid close), it covered any unanswered AFK gap inside it, making the gap invisible to gap detection forever. Lid events now only contribute AFK evidence (lid closed / suspend), never presence.
 - Answering the live "still AFK" dialog now stamps the period as ending when the afk watcher saw you return, rather than when you got around to clicking OK (which could overstate the period by minutes).
-- Already-answered gaps are no longer re-adjusted (and re-logged with "Advancing gap start …" at INFO level) on every 5-second poll.
+- The "Advancing gap start …" line is now logged at INFO only once per AFK period, then at DEBUG on repeats. Previously it was logged on every 5-second poll for as long as a gap kept being detected — answered gaps were already filtered, but a still-pending gap (e.g. while snoozed or queued) re-logged continuously and flooded the journal.
 
 ### Changed
 
