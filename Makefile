@@ -24,10 +24,10 @@ install:  ## Install the package (auto-detects root, uv, pipx, or pip)
 		pip install .; \
 	elif command -v uv >/dev/null 2>&1; then \
 		echo "Installing with uv..."; \
-		uv tool install .; \
+		uv tool install --reinstall .; \
 	elif command -v pipx >/dev/null 2>&1; then \
 		echo "Installing with pipx..."; \
-		pipx install .; \
+		pipx install --force .; \
 	else \
 		echo "Tip: Install uv or pipx for isolated installs (pacman -S uv, apt install pipx, brew install uv)"; \
 		echo "Falling back to pip install --user ..."; \
