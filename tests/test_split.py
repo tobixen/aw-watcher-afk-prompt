@@ -429,6 +429,34 @@ class TestTimeCalculatorAddActivity:
         with pytest.raises(ValueError, match="Last activity must have more than 1 minute"):
             TimeCalculator.add_activity(activities, start + timedelta(minutes=30), equal_distribution=False)
 
+    def test_add_borrows_from_last_unlocked(self) -> None:
+        """When the last activity is locked, the new line's minute must come from
+        the last *unlocked* activity instead."""
+        start = datetime(2025, 1, 15, 14, 0, 0, tzinfo=UTC)
+        activities = [ActivityLine("a", start, 30, 0), ActivityLine("b", start + timedelta(minutes=30), 30, 0)]
+        original_end = start + timedelta(minutes=60)
+
+        new_activities = TimeCalculator.add_activity(
+            activities, original_end, equal_distribution=False, locked_indices={1}
+        )
+
+        assert [a.duration_minutes for a in new_activities] == [29, 30, 1]
+        # Timeline must stay consistent: sequential, ending at original_end
+        assert new_activities[0].start_time == start
+        assert new_activities[1].start_time == new_activities[0].end_time
+        assert new_activities[2].start_time == new_activities[1].end_time
+        assert new_activities[2].end_time == original_end
+
+    def test_add_all_locked_raises(self) -> None:
+        """If every existing activity is locked there is nothing to borrow from."""
+        start = datetime(2025, 1, 15, 14, 0, 0, tzinfo=UTC)
+        activities = [ActivityLine("a", start, 30, 0), ActivityLine("b", start + timedelta(minutes=30), 30, 0)]
+
+        with pytest.raises(ValueError, match="locked"):
+            TimeCalculator.add_activity(
+                activities, start + timedelta(minutes=60), equal_distribution=False, locked_indices={0, 1}
+            )
+
     def test_add_requires_params_for_equal_distribution(self) -> None:
         """Test equal distribution requires original_start and original_duration_seconds."""
         activities = [ActivityLine("test", datetime(2025, 1, 1, 10, 0, 0, tzinfo=UTC), 10, 0)]

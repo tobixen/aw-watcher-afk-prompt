@@ -523,6 +523,7 @@ class TimeCalculator:
         equal_distribution: bool = False,
         original_start: datetime | None = None,
         original_duration_seconds: float | None = None,
+        locked_indices: set[int] | None = None,
     ) -> list[ActivityLine]:
         """Add a new activity line.
 
@@ -532,12 +533,16 @@ class TimeCalculator:
             equal_distribution: If True, redistribute time equally among all activities
             original_start: Required if equal_distribution is True
             original_duration_seconds: Required if equal_distribution is True
+            locked_indices: Activities whose duration must not change; the new
+                line's minute is borrowed from the last unlocked activity
 
         Returns:
             New list of activities with the added line
         """
         if not activities:
             raise ValueError("Cannot add activity to empty list")
+        if locked_indices is None:
+            locked_indices = set()
 
         if equal_distribution:
             if original_start is None or original_duration_seconds is None:
@@ -549,29 +554,34 @@ class TimeCalculator:
                 original_start, original_duration_seconds, len(activities) + 1, descriptions
             )
         else:
-            # Borrow 1 minute from last activity
-            last = activities[-1]
-            if last.duration_minutes <= 1:
+            # Borrow 1 minute from the last unlocked activity
+            unlocked = [i for i in range(len(activities)) if i not in locked_indices]
+            if not unlocked:
+                raise ValueError("All activities are locked, nothing to borrow time from")
+            donor_idx = unlocked[-1]
+            if activities[donor_idx].duration_minutes <= 1:
                 raise ValueError("Last activity must have more than 1 minute to add a new line")
 
-            # Create new list with adjusted last activity
-            new_activities = activities[:-1] + [
-                ActivityLine(
-                    description=last.description,
-                    start_time=last.start_time,
-                    duration_minutes=last.duration_minutes - 1,
-                    duration_seconds=last.duration_seconds,
+            # Rebuild the chain with the donor shortened; start times shift accordingly
+            new_activities: list[ActivityLine] = []
+            current_start = activities[0].start_time
+            for i, activity in enumerate(activities):
+                new_activities.append(
+                    ActivityLine(
+                        description=activity.description,
+                        start_time=current_start,
+                        duration_minutes=activity.duration_minutes - (1 if i == donor_idx else 0),
+                        duration_seconds=activity.duration_seconds,
+                    )
                 )
-            ]
+                current_start = new_activities[-1].end_time
 
-            # Add new activity with 1 minute duration
-            new_start = new_activities[-1].end_time
-            remaining_seconds = (original_end - new_start).total_seconds()
-
+            # Add new activity covering the freed-up tail (~1 minute)
+            remaining_seconds = (original_end - current_start).total_seconds()
             new_activities.append(
                 ActivityLine(
                     description="",
-                    start_time=new_start,
+                    start_time=current_start,
                     duration_minutes=int(remaining_seconds // 60),
                     duration_seconds=int(remaining_seconds % 60),
                 )
@@ -692,6 +702,7 @@ class ActivityLineWidget:
         is_first: bool,
         on_change_callback,
         on_remove_callback,
+        locked: bool = False,
     ):
         """Initialize activity line widget.
 
@@ -703,6 +714,7 @@ class ActivityLineWidget:
             is_first: Whether this is the first activity (start time read-only)
             on_change_callback: Callback when any field changes
             on_remove_callback: Callback when remove button clicked
+            locked: Initial state of the lock checkbox (preserved across redraws)
         """
         self.parent = parent
         self.row = row
@@ -764,7 +776,7 @@ class ActivityLineWidget:
         self.duration_info_label.grid(row=row, column=4, padx=2, pady=2, sticky=tk.W)
 
         # Lock checkbox — when checked, this activity is excluded from time spreading
-        self.locked_var = tk.BooleanVar(master=parent, value=False)
+        self.locked_var = tk.BooleanVar(master=parent, value=locked)
         self.lock_check = ttk.Checkbutton(parent, variable=self.locked_var)
         self.lock_check.grid(row=row, column=5, padx=5, pady=2)
 
@@ -975,8 +987,19 @@ class SplitActivityDialog(simpledialog.Dialog):
             return self.activity_widgets[0].desc_entry
         return None
 
-    def redraw_activities(self):
-        """Redraw all activity line widgets."""
+    def redraw_activities(self, locked_states: list[bool] | None = None):
+        """Redraw all activity line widgets.
+
+        Args:
+            locked_states: Lock checkbox state per activity. The widgets are
+                destroyed and recreated here, so lock state must be carried over
+                explicitly; callers that add/remove lines pass a remapped list.
+                Defaults to the current widgets' state (padded with False).
+        """
+        if locked_states is None:
+            locked_states = [w.is_locked() for w in self.activity_widgets]
+        locked_states = (locked_states + [False] * len(self.activities))[: len(self.activities)]
+
         # Clear existing widgets
         for widget in self.activity_widgets:
             widget.destroy()
@@ -997,6 +1020,7 @@ class SplitActivityDialog(simpledialog.Dialog):
                 is_first=(i == 0),
                 on_change_callback=lambda field, value, idx=i: self.on_activity_changed(idx, field, value),
                 on_remove_callback=self.remove_activity_line,
+                locked=locked_states[i],
             )
             self.activity_widgets.append(widget)
 
@@ -1141,22 +1165,29 @@ class SplitActivityDialog(simpledialog.Dialog):
             pass
 
     def add_activity_line(self):
-        """Add a new activity line."""
+        """Add a new activity line, preserving lock state of existing lines."""
+        locked_states = [w.is_locked() for w in self.activity_widgets]
+        locked_indices = {i for i, locked in enumerate(locked_states) if locked}
+        # A locked line's duration must never change, so equal redistribution
+        # is off the table as soon as anything is locked.
+        use_equal = self.equal_distribution_mode and not locked_indices
         try:
             self.activities = TimeCalculator.add_activity(
                 self.activities,
                 self.afk_end,
-                equal_distribution=self.equal_distribution_mode,
-                original_start=self.afk_start if self.equal_distribution_mode else None,
-                original_duration_seconds=self.afk_duration_seconds if self.equal_distribution_mode else None,
+                equal_distribution=use_equal,
+                original_start=self.afk_start if use_equal else None,
+                original_duration_seconds=self.afk_duration_seconds if use_equal else None,
+                locked_indices=locked_indices,
             )
-            self.redraw_activities()
+            self.redraw_activities(locked_states + [False])
         except ValueError as e:
             # Show error message
             tk.messagebox.showerror("Cannot Add Activity", str(e))
 
     def remove_activity_line(self, index: int):
-        """Remove an activity line."""
+        """Remove an activity line, preserving lock state of the remaining lines."""
+        locked_states = [w.is_locked() for i, w in enumerate(self.activity_widgets) if i != index]
         self.activities = TimeCalculator.remove_activity(self.activities, index)
 
         # If only 1 activity left, return to single-entry mode (exit split mode)
@@ -1171,7 +1202,7 @@ class SplitActivityDialog(simpledialog.Dialog):
             self.destroy()
             return
 
-        self.redraw_activities()
+        self.redraw_activities(locked_states)
 
     def buttonbox(self):
         """Create OK and Cancel buttons."""
