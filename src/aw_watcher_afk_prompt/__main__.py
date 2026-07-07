@@ -90,12 +90,16 @@ def prompt_ongoing(
     )
 
 
-def _deep_scan(state: AWAfkPromptClient, args) -> list[aw_core.Event]:
+def _deep_scan(state: AWAfkPromptClient, args, while_afk: bool = False) -> list[aw_core.Event]:
     """Run the full backfill-depth (e.g. 24h) lookup and return unfilled AFK periods.
 
     Uses a time-bounded fetch (``start_time``) so stale events from inactive
     buckets don't hide real gaps. Raises ConnectionError/HTTPError on server
     trouble so the caller can decide how to react.
+
+    ``while_afk=True`` is for the still-AFK path: the scan then returns earlier
+    *completed* unfilled gaps even though the user is currently AFK (by default
+    the scan yields nothing in that situation).
     """
     from datetime import UTC, datetime, timedelta
 
@@ -106,6 +110,7 @@ def _deep_scan(state: AWAfkPromptClient, args) -> list[aw_core.Event]:
             durration_thresh=args.length * 60,
             min_not_afk_duration=args.min_active,
             start_time=backfill_start,
+            include_while_afk=while_afk,
         )
         or []
     )
@@ -196,8 +201,9 @@ def _handle_still_afk(state: AWAfkPromptClient, args, prompted_ongoing_start) ->
     Earlier *completed* unfilled periods are asked about oldest-first, before the
     live 'still AFK' dialog for the just-started ongoing period — so the user
     always answers the oldest interval first rather than the most recent one.
-    The deep scan never includes the still-ongoing period (it returns early while
-    currently AFK), so any results it gives are earlier, completed gaps.
+    The deep scan runs with ``while_afk=True`` since the user is currently AFK;
+    it never includes the still-ongoing period (gap detection needs a not-afk
+    event on both sides), so any results it gives are earlier, completed gaps.
 
     The live ongoing dialog is shown only once no earlier completed periods
     remain. While such periods are pending we leave ``prompted_ongoing_start``
@@ -212,7 +218,7 @@ def _handle_still_afk(state: AWAfkPromptClient, args, prompted_ongoing_start) ->
     pending: list[aw_core.Event] = []
     if args.backfill:
         try:
-            pending = _deep_scan(state, args)
+            pending = _deep_scan(state, args, while_afk=True)
         except (ConnectionError, HTTPError) as e:
             logger.warning(f"Pending-period check failed: {e}")
 

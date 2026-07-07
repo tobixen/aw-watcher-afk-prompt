@@ -233,11 +233,47 @@ class TestHandleStillAfk:
         state.get_ongoing_afk_event = MagicMock(return_value=ongoing)
         return state
 
+    def test_deep_scan_runs_in_while_afk_mode(self, monkeypatch) -> None:
+        """The still-AFK deep scan must ask for gaps even though the user is
+        currently AFK. Without the flag, get_new_afk_events_to_note bails out on
+        'currently AFK' and the pending list is ALWAYS empty — so the older
+        periods were only ever prompted right after the ongoing dialog closed."""
+        ongoing = self._ongoing_event()
+        state = self._state_with_ongoing(ongoing)
+        captured: dict = {}
+
+        def fake_deep_scan(s, a, while_afk=False):  # noqa: ARG001
+            captured["while_afk"] = while_afk
+            return []
+
+        monkeypatch.setattr(main, "_deep_scan", fake_deep_scan)
+        monkeypatch.setattr(main, "prompt_ongoing", lambda *a, **k: None)
+        monkeypatch.setattr(main, "_post_ongoing_response", lambda *a, **k: None)
+
+        main._handle_still_afk(state, self._args(), prompted_ongoing_start=None)
+
+        assert captured["while_afk"] is True
+
+    def test_deep_scan_forwards_while_afk_flag(self) -> None:
+        """_deep_scan(while_afk=True) must translate into include_while_afk=True
+        on the core scan call."""
+        state = SimpleNamespace(get_new_afk_events_to_note=MagicMock(return_value=iter([])))
+        args = SimpleNamespace(backfill_depth=60.0, length=5.0, min_active=0.0)
+
+        main._deep_scan(state, args, while_afk=True)
+
+        kwargs = state.get_new_afk_events_to_note.call_args.kwargs
+        assert kwargs.get("include_while_afk") is True
+
+        main._deep_scan(state, args)
+        kwargs = state.get_new_afk_events_to_note.call_args.kwargs
+        assert not kwargs.get("include_while_afk")
+
     def test_completed_periods_prompted_before_ongoing(self, monkeypatch) -> None:
         ongoing = self._ongoing_event()
         state = self._state_with_ongoing(ongoing)
         pending = [_event(10), _event(20)]
-        monkeypatch.setattr(main, "_deep_scan", lambda s, a: pending)  # noqa: ARG005
+        monkeypatch.setattr(main, "_deep_scan", lambda s, a, **k: pending)  # noqa: ARG005
         processed: dict = {}
 
         def fake_process(s, events, context, stale_minutes=15.0):  # noqa: ARG001
@@ -262,10 +298,8 @@ class TestHandleStillAfk:
     def test_ongoing_shown_when_no_completed_pending(self, monkeypatch) -> None:
         ongoing = self._ongoing_event()
         state = self._state_with_ongoing(ongoing)
-        monkeypatch.setattr(main, "_deep_scan", lambda s, a: [])  # noqa: ARG005
-        monkeypatch.setattr(
-            main, "_process_events", lambda *a, **k: pytest.fail("should not prompt completed periods")
-        )
+        monkeypatch.setattr(main, "_deep_scan", lambda s, a, **k: [])  # noqa: ARG005
+        monkeypatch.setattr(main, "_process_events", lambda *a, **k: pytest.fail("should not prompt completed periods"))
         shown: dict = {}
 
         def fake_ongoing(event, recent_events, still_afk_check=None):  # noqa: ARG001
@@ -275,7 +309,9 @@ class TestHandleStillAfk:
         monkeypatch.setattr(main, "prompt_ongoing", fake_ongoing)
         posted: dict = {}
         monkeypatch.setattr(
-            main, "_post_ongoing_response", lambda s, o, r, min_active=0.0: posted.update(r=r)  # noqa: ARG005
+            main,
+            "_post_ongoing_response",
+            lambda s, o, r, min_active=0.0: posted.update(r=r),  # noqa: ARG005
         )
 
         result = main._handle_still_afk(state, self._args(), prompted_ongoing_start=None)
@@ -306,7 +342,7 @@ class TestHandleStillAfk:
     def test_snooze_on_completed_propagates(self, monkeypatch) -> None:
         ongoing = self._ongoing_event()
         state = self._state_with_ongoing(ongoing)
-        monkeypatch.setattr(main, "_deep_scan", lambda s, a: [_event(10)])  # noqa: ARG005
+        monkeypatch.setattr(main, "_deep_scan", lambda s, a, **k: [_event(10)])  # noqa: ARG005
         monkeypatch.setattr(main, "_process_events", lambda *a, **k: True)  # user snoozed
         monkeypatch.setattr(main, "prompt_ongoing", lambda *a, **k: pytest.fail("no live dialog after snooze"))
         result = main._handle_still_afk(state, self._args(), prompted_ongoing_start=None)
@@ -316,7 +352,7 @@ class TestHandleStillAfk:
     def test_snooze_on_ongoing_propagates(self, monkeypatch) -> None:
         ongoing = self._ongoing_event()
         state = self._state_with_ongoing(ongoing)
-        monkeypatch.setattr(main, "_deep_scan", lambda s, a: [])  # noqa: ARG005
+        monkeypatch.setattr(main, "_deep_scan", lambda s, a, **k: [])  # noqa: ARG005
         monkeypatch.setattr(main, "prompt_ongoing", lambda *a, **k: None)  # snooze
         monkeypatch.setattr(main, "_post_ongoing_response", lambda *a, **k: None)
         result = main._handle_still_afk(state, self._args(), prompted_ongoing_start=None)

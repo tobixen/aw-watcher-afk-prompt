@@ -364,9 +364,7 @@ def test_advance_gap_logged_once_across_polls(caplog):
             # The gap is still advanced on every poll, only the logging is deduped.
             assert advanced[0].timestamp == FIRST_DATE + datetime.timedelta(seconds=240)
 
-    advance_infos = [
-        r for r in caplog.records if r.levelno == logging.INFO and "Advancing gap start" in r.getMessage()
-    ]
+    advance_infos = [r for r in caplog.records if r.levelno == logging.INFO and "Advancing gap start" in r.getMessage()]
     assert len(advance_infos) == 1, f"expected 1 INFO advance log across 3 polls, got {len(advance_infos)}"
 
 
@@ -525,6 +523,84 @@ def test_stale_events_dont_suppress_boot_gap_via_right_boundary():
 # ---------------------------------------------------------------------------
 # Tests for get_ongoing_afk_start
 # ---------------------------------------------------------------------------
+
+
+def _make_prompt_client(afk_events: list[aw_core.Event]):
+    """Build an AWAfkPromptClient with a fake server, bypassing __init__."""
+    from unittest.mock import MagicMock
+
+    from aw_watcher_afk_prompt.core import AWAfkPromptClient
+
+    inst = AWAfkPromptClient.__new__(AWAfkPromptClient)
+    inst.client = MagicMock()
+    inst.afk_bucket_id = "aw-watcher-afk_test"
+    inst.lid_bucket_id = None
+    inst.window_bucket_id = None
+    inst.history_limit = 100
+
+    def get_events(bucket_id, limit=100, start=None, end=None):  # noqa: ARG001
+        events = afk_events
+        if start is not None:
+            events = [e for e in events if e.timestamp >= start]
+        return list(events)
+
+    inst.client.get_events.side_effect = get_events
+    inst.state = AWAfkPromptState([])
+    return inst
+
+
+def _still_afk_event_set() -> list[aw_core.Event]:
+    """Event history where the user is *currently AFK* and an earlier completed
+    gap (30 min, ending 1 h ago) was never filled in."""
+    now = datetime.datetime.now(datetime.UTC)
+
+    def _ev(start_min_ago: float, duration_min: float, status: str) -> aw_core.Event:
+        return aw_core.Event(
+            timestamp=now - datetime.timedelta(minutes=start_min_ago),
+            duration=datetime.timedelta(minutes=duration_min),
+            data={"status": status},
+        )
+
+    return [
+        _ev(150, 30, NOT_AFK),  # active 150-120 min ago
+        # gap: 120-90 min ago — the completed, unfilled period
+        _ev(90, 30, NOT_AFK),  # active 90-60 min ago
+        _ev(60, 60, AFK),  # AFK from 60 min ago until now (ongoing)
+    ]
+
+
+def test_backfill_skips_everything_while_currently_afk_by_default():
+    """Default behavior: while currently AFK, the scan yields nothing (the
+    shallow real-time path relies on this to wait for the user's return)."""
+    client = _make_prompt_client(_still_afk_event_set())
+    found = list(client.get_new_afk_events_to_note(seconds=INF, durration_thresh=5 * 60))
+    assert found == []
+
+
+def test_backfill_finds_completed_gaps_while_currently_afk():
+    """The still-AFK backfill path must find earlier *completed* unfilled gaps
+    even though the user is currently AFK — otherwise the oldest-first
+    prompting while away never triggers, and the old periods pop up right
+    after the ongoing dialog is answered instead (observed 2026-07-06).
+
+    The still-ongoing AFK period must NOT be included (it has no right
+    boundary yet)."""
+    now = datetime.datetime.now(datetime.UTC)
+    client = _make_prompt_client(_still_afk_event_set())
+
+    found = list(
+        client.get_new_afk_events_to_note(
+            seconds=INF,
+            durration_thresh=5 * 60,
+            start_time=now - datetime.timedelta(hours=24),
+            include_while_afk=True,
+        )
+    )
+
+    assert len(found) == 1, f"expected exactly the completed gap, got {found}"
+    gap = found[0]
+    assert abs((gap.timestamp - (now - datetime.timedelta(minutes=120))).total_seconds()) < 1
+    assert abs(gap.duration.total_seconds() - 30 * 60) < 1
 
 
 def test_get_ongoing_afk_start_returns_none_when_not_afk():

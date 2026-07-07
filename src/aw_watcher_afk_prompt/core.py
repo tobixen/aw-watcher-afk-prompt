@@ -575,6 +575,7 @@ class AWAfkPromptClient:
         durration_thresh: float,
         min_not_afk_duration: float = 0.0,
         start_time: datetime.datetime | None = None,
+        include_while_afk: bool = False,
     ) -> Iterator[aw_core.Event] | None:
         """Check whether we recently finished a large AFK event.
 
@@ -591,6 +592,12 @@ class AWAfkPromptClient:
             The number of seconds to look into the past for events.
         durration_thresh : float
             The number of seconds you need to be away before reporting on it.
+        include_while_afk : bool
+            By default the scan yields nothing while the user is currently AFK
+            (wait for their return before prompting). Set True for the
+            still-AFK backfill path, which wants earlier *completed* unfilled
+            gaps even now. The still-ongoing period is never included either
+            way — gap detection needs a not-afk event on both sides.
         """
         # Fetch events with dynamic limit scaling (or time-bounded for backfill).
         # Connection errors (HTTPError, ConnectionError) are intentionally NOT caught here
@@ -608,7 +615,7 @@ class AWAfkPromptClient:
                 f"Most recent event: {most_recent.timestamp.astimezone(LOCAL_TIMEZONE).strftime('%H:%M:%S')} | "
                 f"status={most_recent.data.get('status')} | currently_afk={currently_afk}"
             )
-            if currently_afk:
+            if currently_afk and not include_while_afk:
                 # Currently AFK, wait to bring up the prompt
                 logger.debug("Currently AFK, waiting for user to return")
                 return
