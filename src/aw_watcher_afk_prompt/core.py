@@ -620,12 +620,19 @@ class AWAfkPromptClient:
                 logger.debug("Currently AFK, waiting for user to return")
                 return
 
-        # Fetch window events for gap-start adjustment (if window watcher is present)
+        # Fetch window events for gap-start adjustment (if window watcher is present).
+        # The fetch must be time-bounded to the scanned range: a bare limit-N fetch
+        # loses the events covering an older gap's idle countdown as newer window
+        # events accumulate, making the adjustment (and thereby a near-threshold
+        # gap's eligibility, and the seen-overlap check) flap between scans.
         window_events: list[aw_core.Event] = []
         if self.window_bucket_id:
+            window_start = start_time
+            if window_start is None and all_events:
+                window_start = all_events[0].timestamp
             try:
-                raw = self.client.get_events(self.window_bucket_id, limit=self.history_limit)
-                window_events = raw
+                fetch_limit = max(self.history_limit * 20, 2000)
+                window_events = self.client.get_events(self.window_bucket_id, limit=fetch_limit, start=window_start)
             except Exception:
                 logger.warning("Failed to fetch window events for gap-start adjustment, skipping")
 

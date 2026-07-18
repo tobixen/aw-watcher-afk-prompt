@@ -368,6 +368,89 @@ def test_advance_gap_logged_once_across_polls(caplog):
     assert len(advance_infos) == 1, f"expected 1 INFO advance log across 3 polls, got {len(advance_infos)}"
 
 
+def test_window_fetch_time_bounded_so_adjustment_is_stable():
+    """The window-event fetch must cover the whole scanned range, not just the
+    most recent ``history_limit`` events.
+
+    Regression (observed 2026-07-16): the fetch used ``limit=history_limit``
+    with no time bound, so once the user generated 100+ new window events, the
+    events covering an older gap's idle countdown rolled out of the fetch and
+    the gap-start adjustment silently stopped applying to that gap. Near-
+    threshold gaps thereby flapped between eligible/ineligible across scans
+    (prompted late, out of order) and answered gaps flapped between seen/unseen
+    (double prompts).
+    """
+    now = datetime.datetime.now(datetime.UTC)
+
+    def _at(seconds_ago: float) -> datetime.datetime:
+        return now - datetime.timedelta(seconds=seconds_ago)
+
+    afk_events = [
+        aw_core.Event(timestamp=_at(3600), duration=datetime.timedelta(seconds=120), data={"status": NOT_AFK}),
+        # idle countdown 3480-3360s ago (window activity present), then the AFK event
+        aw_core.Event(timestamp=_at(3360), duration=datetime.timedelta(seconds=2760), data={"status": AFK}),
+        aw_core.Event(timestamp=_at(600), duration=datetime.timedelta(seconds=590), data={"status": NOT_AFK}),
+    ]
+    countdown_window_event = aw_core.Event(
+        timestamp=_at(3480), duration=datetime.timedelta(seconds=120), data={"app": "foot", "title": "terminal"}
+    )
+    # 150 newer window events (> history_limit=100): with an unbounded
+    # limit-only fetch these push the countdown event out of the result.
+    filler_window_events = [
+        aw_core.Event(
+            timestamp=_at(590 - 2 * i), duration=datetime.timedelta(seconds=1), data={"app": "foot", "title": f"w{i}"}
+        )
+        for i in range(150)
+    ]
+
+    client = _make_prompt_client(afk_events, window_events=[countdown_window_event, *filler_window_events])
+
+    found = list(client.get_new_afk_events_to_note(seconds=INF, durration_thresh=300))
+
+    assert len(found) == 1
+    # With the countdown window event visible, the gap start must be advanced
+    # to the AFK-event start — same as it was when the gap was first scanned.
+    assert found[0].timestamp == afk_events[1].timestamp
+    assert int(found[0].duration.total_seconds()) == 2760
+
+
+def test_window_fetch_time_bounded_in_backfill_mode():
+    """The deep (start_time-bounded) scan must bound the window fetch the same way."""
+    now = datetime.datetime.now(datetime.UTC)
+
+    def _at(seconds_ago: float) -> datetime.datetime:
+        return now - datetime.timedelta(seconds=seconds_ago)
+
+    afk_events = [
+        aw_core.Event(timestamp=_at(3600), duration=datetime.timedelta(seconds=120), data={"status": NOT_AFK}),
+        aw_core.Event(timestamp=_at(3360), duration=datetime.timedelta(seconds=2760), data={"status": AFK}),
+        aw_core.Event(timestamp=_at(600), duration=datetime.timedelta(seconds=590), data={"status": NOT_AFK}),
+    ]
+    countdown_window_event = aw_core.Event(
+        timestamp=_at(3480), duration=datetime.timedelta(seconds=120), data={"app": "foot", "title": "terminal"}
+    )
+    filler_window_events = [
+        aw_core.Event(
+            timestamp=_at(590 - 2 * i), duration=datetime.timedelta(seconds=1), data={"app": "foot", "title": f"w{i}"}
+        )
+        for i in range(150)
+    ]
+
+    client = _make_prompt_client(afk_events, window_events=[countdown_window_event, *filler_window_events])
+
+    found = list(
+        client.get_new_afk_events_to_note(
+            seconds=24 * 3600,
+            durration_thresh=300,
+            start_time=now - datetime.timedelta(hours=24),
+        )
+    )
+
+    assert len(found) == 1
+    assert found[0].timestamp == afk_events[1].timestamp
+    assert int(found[0].duration.total_seconds()) == 2760
+
+
 def test_get_unseen_afk_events_no_window_param_unchanged():
     """Without window events, get_unseen_afk_events behaves as before (no regression)."""
     afk_events = [
@@ -525,8 +608,13 @@ def test_stale_events_dont_suppress_boot_gap_via_right_boundary():
 # ---------------------------------------------------------------------------
 
 
-def _make_prompt_client(afk_events: list[aw_core.Event]):
-    """Build an AWAfkPromptClient with a fake server, bypassing __init__."""
+def _make_prompt_client(afk_events: list[aw_core.Event], window_events: list[aw_core.Event] | None = None):
+    """Build an AWAfkPromptClient with a fake server, bypassing __init__.
+
+    The fake honors ``limit`` (most recent N events, like the real server) and
+    ``start`` for the window bucket, so tests can model window events rolling
+    out of a limited fetch.
+    """
     from unittest.mock import MagicMock
 
     from aw_watcher_afk_prompt.core import AWAfkPromptClient
@@ -535,14 +623,15 @@ def _make_prompt_client(afk_events: list[aw_core.Event]):
     inst.client = MagicMock()
     inst.afk_bucket_id = "aw-watcher-afk_test"
     inst.lid_bucket_id = None
-    inst.window_bucket_id = None
+    inst.window_bucket_id = "aw-watcher-window_test" if window_events is not None else None
     inst.history_limit = 100
 
     def get_events(bucket_id, limit=100, start=None, end=None):  # noqa: ARG001
-        events = afk_events
+        events = afk_events if bucket_id == inst.afk_bucket_id else (window_events or [])
         if start is not None:
             events = [e for e in events if e.timestamp >= start]
-        return list(events)
+        events = sorted(events, key=lambda e: e.timestamp)
+        return events[-limit:]  # the server returns the most recent `limit` events
 
     inst.client.get_events.side_effect = get_events
     inst.state = AWAfkPromptState([])
