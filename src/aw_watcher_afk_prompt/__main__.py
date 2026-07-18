@@ -1,7 +1,7 @@
 # ruff: noqa: EM101, EM102
 import argparse
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from tkinter import messagebox
 from typing import NamedTuple
 
@@ -28,12 +28,12 @@ from aw_watcher_afk_prompt.utils import format_age, format_duration, format_time
 SNOOZE_SECONDS = 300
 
 
-def prompt(
-    event: aw_core.Event,
-    recent_events: Iterable[aw_core.Event],
-    queue_info: dict | None = None,
-    stale_minutes: float = 15.0,
-) -> str | None:
+def _make_prompt_text(event: aw_core.Event, stale_minutes: float) -> str:
+    """The question for a completed AFK period, including how stale it is.
+
+    Recomputed rather than stored, so a dialog that sits unanswered can refresh
+    the age instead of insisting the period ended "2 minutes ago" an hour later.
+    """
     from datetime import UTC, datetime, timedelta
 
     # TODO: Allow for customizing the prompt from the prompt interface.
@@ -45,19 +45,71 @@ def prompt(
         datetime.now(UTC) - (event.timestamp + event.duration),
         stale_threshold=timedelta(minutes=stale_minutes),
     )
-    prompt_text = (
-        f"What were you doing from {start_time_str} - {end_time_str} ({format_duration(event.duration)})?\n{age_str}"
-    )
+    return f"What were you doing from {start_time_str} - {end_time_str} ({format_duration(event.duration)})?\n{age_str}"
+
+
+def _make_refresh(
+    event: aw_core.Event,
+    *,
+    answered: int,
+    stale_minutes: float,
+    rescan: Callable[[], list[aw_core.Event]] | None = None,
+    ongoing_check: Callable[[], bool] | None = None,
+) -> Callable[[], dict]:
+    """Build the callback an open dialog uses to keep itself up to date.
+
+    Returns a dict of what changed: the prompt text (ageing) and, when a rescan
+    is available, the recounted queue info — so leaving and returning a couple of
+    times while a dialog waits turns "(1 of 1)" into "(1 of 3)" instead of
+    surfacing later as stand-alone surprise prompts.
+
+    A recount that fails against the server omits "queue_info" entirely: the
+    dialog then keeps the count it has, rather than showing a made-up one.
+    """
+
+    def refresh() -> dict:
+        update: dict = {"prompt": _make_prompt_text(event, stale_minutes)}
+        if rescan is None:
+            return update
+        try:
+            remaining = sorted(rescan(), key=lambda e: e.timestamp)
+        except (ConnectionError, HTTPError) as e:
+            logger.debug(f"Live queue recount failed, keeping the current count: {e}")
+            return update
+        # The period being prompted is unanswered by definition, so it counts even
+        # if the scan window no longer reports it.
+        if not any(e.timestamp == event.timestamp for e in remaining):
+            remaining = [event, *remaining]
+        ongoing = False
+        if ongoing_check is not None:
+            try:
+                ongoing = bool(ongoing_check())
+            except (ConnectionError, HTTPError) as e:
+                logger.debug(f"Live ongoing-period check failed: {e}")
+        update["queue_info"] = _build_queue_info(remaining, answered, ongoing)
+        return update
+
+    return refresh
+
+
+def prompt(
+    event: aw_core.Event,
+    recent_events: Iterable[aw_core.Event],
+    queue_info: dict | None = None,
+    stale_minutes: float = 15.0,
+    refresh: Callable[[], dict] | None = None,
+) -> str | None:
     title = "AFK Checkin"
 
     # Pass afk_start and afk_duration_seconds to enable Split button
     return aw_dialog.ask_string(
         title,
-        prompt_text,
+        _make_prompt_text(event, stale_minutes),
         [event.data.get(DATA_KEY, "") for event in recent_events],
         afk_start=event.timestamp,
         afk_duration_seconds=event.duration.total_seconds(),
         queue_info=queue_info,
+        refresh=refresh,
     )
 
 
@@ -65,6 +117,7 @@ def prompt_ongoing(
     event: aw_core.Event,
     recent_events,
     still_afk_check=None,
+    refresh: Callable[[], dict] | None = None,
 ) -> str | None:
     """Show a live-updating dialog for an AFK period that is still in progress.
 
@@ -87,6 +140,7 @@ def prompt_ongoing(
         afk_duration_seconds=None,
         is_ongoing=True,
         still_afk_check=still_afk_check,
+        refresh=refresh,
     )
 
 
@@ -116,34 +170,88 @@ def _deep_scan(state: AWAfkPromptClient, args, while_afk: bool = False) -> list[
     )
 
 
+def _rescan_hook(state: AWAfkPromptClient, args) -> Callable[[], list[aw_core.Event]]:
+    """Queue-refresh hook: repeat the full backfill-depth scan.
+
+    Always in while-afk mode. The usual reason a dialog sits unanswered is that
+    nobody is at the keyboard, and a scan that bails out on "currently AFK" would
+    then report an empty queue — blanking the count in the open dialog and
+    dropping the rest of the queue between prompts.
+    """
+    return lambda: _deep_scan(state, args, while_afk=True)
+
+
+def _ongoing_check(state: AWAfkPromptClient, args) -> Callable[[], bool]:
+    """Is an AFK period running right now?
+
+    Used both to count the still-running period into queue totals and to tell an
+    open dialog whether there is anyone there to see it.
+    """
+    return lambda: state.get_ongoing_afk_event(args.length * 60) is not None
+
+
 def _process_events(
-    state: AWAfkPromptClient, events: list[aw_core.Event], *, context: str, stale_minutes: float = 15.0
+    state: AWAfkPromptClient,
+    events: list[aw_core.Event],
+    *,
+    context: str,
+    stale_minutes: float = 15.0,
+    rescan: Callable[[], list[aw_core.Event]] | None = None,
+    ongoing_check: Callable[[], bool] | None = None,
 ) -> bool:
     """Prompt the user for each unfilled AFK period, oldest first.
 
     Each prompt carries queue info ("(N of total) — next: …") so the user can see
-    how many more periods remain to be backfilled. Split responses are posted as
-    multiple activities, and normal responses are posted as a single event.
+    how many more periods remain to be backfilled. The queue is not a frozen
+    snapshot: after every answer it is refreshed via ``rescan``, so a period
+    that completed while a dialog sat unanswered joins the same queue run
+    instead of surfacing minutes later as a stand-alone surprise prompt. When
+    ``ongoing_check`` reports a still-running AFK period, it is counted into the
+    total as well, so a lone completed gap announces "(1 of 2)" rather than
+    pretending to be the only open interval.
+
+    The same refresh happens *while* a dialog is open (see ``_make_refresh``), so
+    an unanswered prompt updates its own age and count instead of going stale.
+
+    Split responses are posted as multiple activities, and normal responses are
+    posted as a single event.
 
     A snoozed prompt (None) stops the queue: the remaining periods stay
     unanswered and will be re-found by the next deep scan. Returns True when the
     user snoozed, so the caller can suppress prompts for SNOOZE_SECONDS.
     """
-    events = sorted(events, key=lambda e: e.timestamp)
-    if not events:
+    queue = sorted(events, key=lambda e: e.timestamp)
+    if not queue:
         return False
-    logger.info(f"{context}: {len(events)} unfilled AFK period(s) to prompt")
-    for i, event in enumerate(events):
+    logger.info(f"{context}: {len(queue)} unfilled AFK period(s) to prompt")
+    answered = 0
+    while queue:
+        event = queue[0]
+        ongoing = False
+        if ongoing_check is not None:
+            try:
+                ongoing = bool(ongoing_check())
+            except (ConnectionError, HTTPError) as e:
+                logger.warning(f"Ongoing-period check failed: {e}")
         response = prompt(
-            event, state.state.recent_events, queue_info=_build_queue_info(events, i), stale_minutes=stale_minutes
+            event,
+            state.state.recent_events,
+            queue_info=_build_queue_info(queue, answered, ongoing),
+            stale_minutes=stale_minutes,
+            refresh=_make_refresh(
+                event,
+                answered=answered,
+                stale_minutes=stale_minutes,
+                rescan=rescan,
+                ongoing_check=ongoing_check,
+            ),
         )
         if response is None:
-            remaining = len(events) - i
             logger.info(
                 f"Dialog snoozed for gap at "
                 f"{format_time_local(event.timestamp)}-{format_time_local(event.timestamp + event.duration)} "
                 f"({format_duration(event.duration)}) — suppressing prompts for {SNOOZE_SECONDS // 60} minutes, "
-                f"{remaining} period(s) left for the next scan"
+                f"{len(queue)} period(s) left for the next scan"
             )
             return True
         elif isinstance(response, tuple) and response[0] == "SPLIT_MODE":
@@ -153,6 +261,17 @@ def _process_events(
         else:
             logger.info(response)
             state.post_event(event, response)
+        answered += 1
+        queue = queue[1:]
+        if rescan is not None:
+            try:
+                refreshed = sorted(rescan(), key=lambda e: e.timestamp)
+            except (ConnectionError, HTTPError) as e:
+                logger.warning(f"Queue refresh failed, keeping current queue: {e}")
+            else:
+                if len(refreshed) != len(queue):
+                    logger.info(f"{context}: queue refreshed, {len(refreshed)} period(s) now pending")
+                queue = refreshed
     return False
 
 
@@ -222,34 +341,69 @@ def _handle_still_afk(state: AWAfkPromptClient, args, prompted_ongoing_start) ->
         except (ConnectionError, HTTPError) as e:
             logger.warning(f"Pending-period check failed: {e}")
 
+    def ongoing_queue_refresh() -> dict:
+        """Recount what is waiting behind the live dialog while it sits open.
+
+        The live dialog is the one on screen while the user is away, so this is
+        where "(1 of 3)" has to appear when periods pile up behind it. The ongoing
+        period is the one being answered, hence first; the completed gaps follow.
+        """
+        try:
+            others = sorted(_rescan_hook(state, args)(), key=lambda e: e.timestamp)
+        except (ConnectionError, HTTPError) as e:
+            logger.debug(f"Live queue recount failed, keeping the current count: {e}")
+            return {}
+        return {"queue_info": _build_queue_info([ongoing, *others])}
+
     if pending:
-        # Ask about the earlier completed periods first, oldest-first.
-        snoozed = _process_events(state, pending, context="Still-AFK backfill", stale_minutes=args.stale_warning)
+        # Ask about the earlier completed periods first, oldest-first. The queue
+        # counts the ongoing period and refreshes after every answer (and while a
+        # dialog is open), so any period completing while a dialog sits open joins
+        # this same run.
+        snoozed = _process_events(
+            state,
+            pending,
+            context="Still-AFK backfill",
+            stale_minutes=args.stale_warning,
+            rescan=_rescan_hook(state, args),
+            ongoing_check=_ongoing_check(state, args),
+        )
         return _StillAfkResult(prompted_ongoing_start, snoozed=snoozed, deep_scan="now")
 
     # Nothing earlier outstanding — show the live, self-updating ongoing dialog.
     response = prompt_ongoing(
         ongoing,
         state.state.recent_events,
-        still_afk_check=lambda: state.get_ongoing_afk_event(args.length * 60) is not None,
+        still_afk_check=_ongoing_check(state, args),
+        refresh=ongoing_queue_refresh if args.backfill else None,
     )
     _post_ongoing_response(state, ongoing, response, min_active=args.min_active)
     return _StillAfkResult(ongoing.timestamp, snoozed=response is None, deep_scan="reset")
 
 
-def _build_queue_info(events: list[aw_core.Event], index: int) -> dict | None:
-    """Build queue info dict for the dialog when multiple AFK intervals are pending."""
-    if len(events) <= 1:
+def _build_queue_info(remaining: list[aw_core.Event], answered: int = 0, ongoing: bool = False) -> dict | None:
+    """Build queue info dict for the dialog when multiple AFK intervals are open.
+
+    ``remaining`` is the not-yet-answered queue (the event being prompted
+    first), ``answered`` how many were already answered in this queue run, and
+    ``ongoing`` whether the current, still-running AFK period will need an
+    answer too — it counts into the total and is announced as the final "next".
+    """
+    total = answered + len(remaining) + (1 if ongoing else 0)
+    if total <= 1:
         return None
-    next_event = events[index + 1] if index + 1 < len(events) else None
-    next_str = None
-    if next_event:
+    next_event = remaining[1] if len(remaining) > 1 else None
+    if next_event is not None:
         start = format_time_local(next_event.timestamp)
         end = format_time_local(next_event.timestamp + next_event.duration)
         next_str = f"{start}–{end} ({format_duration(next_event.duration)})"
+    elif ongoing:
+        next_str = "the current AFK period (still ongoing)"
+    else:
+        next_str = None
     return {
-        "position": index + 1,
-        "total": len(events),
+        "position": answered + 1,
+        "total": total,
         "next_str": next_str,
     }
 
@@ -518,6 +672,10 @@ def main() -> None:
             # snoozed_until: no prompts before this time (the watcher keeps scanning).
             last_deep_scan = 0.0
             snoozed_until = 0.0
+
+            rescan_deep = _rescan_hook(state, args)
+            ongoing_check = _ongoing_check(state, args)
+
             if args.backfill:
                 logger.info(f"Backfill mode enabled, looking back {args.backfill_depth} minutes")
                 try:
@@ -526,7 +684,12 @@ def main() -> None:
                     logger.warning(f"Backfill failed due to server error: {e}")
                     backfill_events = []
                 if _process_events(
-                    state, backfill_events, context="Startup backfill", stale_minutes=args.stale_warning
+                    state,
+                    backfill_events,
+                    context="Startup backfill",
+                    stale_minutes=args.stale_warning,
+                    rescan=rescan_deep,
+                    ongoing_check=ongoing_check,
                 ):
                     snoozed_until = time.monotonic() + SNOOZE_SECONDS
                 last_deep_scan = time.monotonic()
@@ -580,13 +743,24 @@ def main() -> None:
                     if prompts_allowed:
                         if args.backfill and (shallow or due_for_deep):
                             pending = _deep_scan(state, args)
-                            last_deep_scan = time.monotonic()
                             snoozed = _process_events(
-                                state, pending, context="Backfill scan", stale_minutes=args.stale_warning
+                                state,
+                                pending,
+                                context="Backfill scan",
+                                stale_minutes=args.stale_warning,
+                                rescan=rescan_deep,
+                                ongoing_check=ongoing_check,
                             )
+                            # After the queue run: its rescans kept the scan fresh
+                            # throughout, however long the dialogs sat open.
+                            last_deep_scan = time.monotonic()
                         else:
                             snoozed = _process_events(
-                                state, shallow, context="AFK check", stale_minutes=args.stale_warning
+                                state,
+                                shallow,
+                                context="AFK check",
+                                stale_minutes=args.stale_warning,
+                                ongoing_check=ongoing_check,
                             )
                         if snoozed:
                             snoozed_until = time.monotonic() + SNOOZE_SECONDS

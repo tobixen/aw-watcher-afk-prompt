@@ -16,8 +16,29 @@ logger = logging.getLogger(__name__)
 # How often the ongoing dialog polls the afk watcher to notice the user returned.
 _AFK_POLL_INTERVAL_MS = 5_000
 
+# How often an open dialog asks the caller for fresh facts (see the ``refresh``
+# argument of AWAfkPromptDialog). Both things it displays go stale while it sits
+# unanswered: the "ended N minutes ago" age, and the "(N of M)" queue count when
+# further AFK periods pile up behind it.
+_REFRESH_INTERVAL_MS = 60_000
+
+# Trailing marker on the ongoing prompt, dropped once the user is back.
+_STILL_AFK_RE = re.compile(r"\s*\(still AFK\)\s*$")
+
 root = tk.Tk()
 root.withdraw()
+
+
+def _queue_text(queue_info: dict | None) -> str:
+    """Render the "(2 of 5) — next: …" line; empty string when there is no queue."""
+    if not queue_info:
+        return ""
+    pos = queue_info["position"]
+    total = queue_info["total"]
+    next_str = queue_info.get("next_str")
+    if next_str:
+        return f"({pos} of {total}) — next: {next_str}"
+    return f"({pos} of {total}) — last interval"
 
 
 def open_link(link: str) -> None:
@@ -189,6 +210,7 @@ class AWAfkPromptDialog(simpledialog.Dialog):
         queue_info: dict | None = None,
         is_ongoing: bool = False,
         still_afk_check=None,
+        refresh=None,
     ) -> None:
         self.prompt = prompt
         self.history = history
@@ -201,6 +223,14 @@ class AWAfkPromptDialog(simpledialog.Dialog):
         # Callable returning True while the user is still AFK. Polled so the dialog
         # can notice the user returned (via the OS afk watcher) without them typing.
         self.still_afk_check = still_afk_check
+        # Callable returning a dict of facts that may have changed while the dialog
+        # waited: {"prompt": str, "queue_info": dict | None}. A missing key means
+        # "unchanged" (e.g. a failed recount), so it can report partial updates.
+        self.refresh = refresh
+        self._returned = False
+        self._live_timer = None
+        self._afk_poll_timer = None
+        self._refresh_timer = None
         super().__init__(root, title)
 
     # @override (when we get to 3.12)
@@ -265,21 +295,66 @@ class AWAfkPromptDialog(simpledialog.Dialog):
             if self.still_afk_check is not None:
                 self._afk_poll_timer = self.after(_AFK_POLL_INTERVAL_MS, self._poll_afk)
 
-        # Queue info label: shown when multiple AFK intervals are pending
-        if self.queue_info:
-            pos = self.queue_info["position"]
-            total = self.queue_info["total"]
-            next_str = self.queue_info.get("next_str")
-            if next_str:
-                queue_text = f"({pos} of {total}) — next: {next_str}"
-            else:
-                queue_text = f"({pos} of {total}) — last interval"
-            queue_label = ttk.Label(master, text=queue_text, foreground="gray", justify=tk.LEFT)
-            queue_label.grid(row=3, padx=5, sticky=tk.W, columnspan=2)
+        # Queue info label: shown when multiple AFK intervals are pending. Always
+        # built (but only gridded while non-empty) so a queue that appears or grows
+        # while the dialog waits can be shown without rebuilding the body.
+        self._queue_var = tk.StringVar(value=_queue_text(self.queue_info))
+        self._queue_label = ttk.Label(master, textvariable=self._queue_var, foreground="gray", justify=tk.LEFT)
+        self._grid_queue_label()
 
-        # No auto-snooze: an unanswered dialog stays put until the user answers or
-        # snoozes it explicitly, so a prompt is never silently lost while they are away.
+        # Keep an unanswered dialog honest: re-read the age and the queue count from
+        # the caller once a minute, so it can't keep claiming the period ended "2
+        # minutes ago" an hour later, or that it is the only interval waiting.
+        if self.refresh is not None:
+            self._refresh_timer = self.after(_REFRESH_INTERVAL_MS, self._refresh_tick)
+
         return self.entry
+
+    def _grid_queue_label(self) -> None:
+        """Show the queue line only when there is something to say."""
+        if self._queue_var.get():
+            self._queue_label.grid(row=3, padx=5, sticky=tk.W, columnspan=2)
+        else:
+            self._queue_label.grid_remove()
+
+    def _cancel_timers(self, *names: str) -> None:
+        """Cancel the named ``after`` callbacks if armed. Idempotent."""
+        for name in names:
+            timer = getattr(self, name, None)
+            if timer is not None:
+                self.after_cancel(timer)
+                setattr(self, name, None)
+
+    def _cancel_all_timers(self) -> None:
+        self._cancel_timers("_live_timer", "_afk_poll_timer", "_refresh_timer")
+
+    def _set_prompt_text(self, text: str) -> None:
+        """Update the prompt label, keeping the "user is back" wording consistent."""
+        if self._returned:
+            text = _STILL_AFK_RE.sub("", text)
+        self._prompt_label.configure(text=text)
+
+    def _refresh_tick(self) -> None:
+        self._refresh_now()
+        self._refresh_timer = self.after(_REFRESH_INTERVAL_MS, self._refresh_tick)
+
+    def _refresh_now(self) -> None:
+        """Pull the current prompt text / queue count from the ``refresh`` callback.
+
+        Keys the callback leaves out are left as they are — a recount that failed
+        against the server must not blank the queue line or invent a number.
+        """
+        try:
+            update = self.refresh() or {}
+        except Exception:
+            logger.exception("Dialog refresh failed; keeping the text as it is")
+            return
+        if update.get("prompt"):
+            self._set_prompt_text(update["prompt"])
+        if "queue_info" in update:
+            self.queue_info = update["queue_info"]
+            self._queue_var.set(_queue_text(self.queue_info))
+            self._grid_queue_label()
 
     def _make_duration_text(self) -> str:
         from datetime import UTC, datetime
@@ -309,15 +384,10 @@ class AWAfkPromptDialog(simpledialog.Dialog):
         """The user is back (they typed, or the afk watcher reports activity):
         freeze the duration and drop the 'still AFK' wording so the dialog no
         longer claims the period is ongoing."""
-        if getattr(self, "_returned", False):
+        if self._returned:
             return
         self._returned = True
-        if hasattr(self, "_live_timer"):
-            self.after_cancel(self._live_timer)
-            del self._live_timer
-        if hasattr(self, "_afk_poll_timer"):
-            self.after_cancel(self._afk_poll_timer)
-            del self._afk_poll_timer
+        self._cancel_timers("_live_timer", "_afk_poll_timer")
         # Freeze the live duration label (no more "updating...").
         if hasattr(self, "_duration_var") and self.afk_start is not None:
             from datetime import UTC, datetime
@@ -328,8 +398,7 @@ class AWAfkPromptDialog(simpledialog.Dialog):
             self._duration_var.set(f"Time away: {format_duration(elapsed)}")
         # Drop the trailing "(still AFK)" marker from the prompt label.
         if hasattr(self, "_prompt_label"):
-            new_text = re.sub(r"\s*\(still AFK\)\s*$", "", self._prompt_label.cget("text"))
-            self._prompt_label.configure(text=new_text)
+            self._set_prompt_text(self._prompt_label.cget("text"))
 
     def _tick_duration(self) -> None:
         if hasattr(self, "_duration_var"):
@@ -452,12 +521,7 @@ class AWAfkPromptDialog(simpledialog.Dialog):
     def cancel(self, event=None):  # noqa: ARG002
         # Call withdraw first because it is faster.
         # The process should wait on the destroy instead of the human.
-        if hasattr(self, "_live_timer"):
-            self.after_cancel(self._live_timer)
-            del self._live_timer
-        if hasattr(self, "_afk_poll_timer"):
-            self.after_cancel(self._afk_poll_timer)
-            del self._afk_poll_timer
+        self._cancel_all_timers()
         self.withdraw()
         self.destroy()
 
@@ -482,12 +546,7 @@ class AWAfkPromptDialog(simpledialog.Dialog):
             from datetime import UTC, datetime
 
             self.afk_duration_seconds = (datetime.now(UTC) - self.afk_start).total_seconds()
-        if hasattr(self, "_live_timer"):
-            self.after_cancel(self._live_timer)
-            del self._live_timer
-        if hasattr(self, "_afk_poll_timer"):
-            self.after_cancel(self._afk_poll_timer)
-            del self._afk_poll_timer
+        self._cancel_all_timers()
         self.destroy()
 
     # @override (when we get to 3.12)
@@ -642,6 +701,7 @@ def ask_string(
     queue_info: dict | None = None,
     is_ongoing: bool = False,
     still_afk_check=None,
+    refresh=None,
 ) -> str | None | tuple:
     """Ask for a string input, with optional split mode support.
 
@@ -652,6 +712,8 @@ def ask_string(
         afk_start: Start time of AFK period (optional, enables split mode)
         afk_duration_seconds: Duration of AFK period in seconds (optional)
         initial_value: Pre-fill the entry with this value (for editing)
+        refresh: Callable re-read once a minute for facts that go stale while the
+            dialog waits: {"prompt": str, "queue_info": dict | None}
 
     Returns:
         String input from user, or None if cancelled
@@ -670,6 +732,7 @@ def ask_string(
             queue_info=queue_info,
             is_ongoing=is_ongoing,
             still_afk_check=still_afk_check,
+            refresh=refresh,
         )
 
         # Pre-fill with initial value or text from split mode
