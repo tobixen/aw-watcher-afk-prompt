@@ -781,8 +781,12 @@ class AWAfkPromptState:
 
         # If window events are provided, advance each gap's start past the idle
         # countdown when window activity was present (fixes 2-min systematic overlap).
+        # Keep the raw duration alongside: eligibility below is judged on the raw
+        # span, so the adjustment can never push a gap below the length threshold
+        # in one scan but not another (which prompted gaps late and out of order).
+        gap_pairs: list[tuple[aw_core.Event, datetime.timedelta]] = [(g, g.duration) for g in pseudo_afk_events]
         if window_events:
-            adjusted: list[aw_core.Event] = []
+            adjusted: list[tuple[aw_core.Event, datetime.timedelta]] = []
             logged_now: set[datetime.datetime] = set()
             for gap in pseudo_afk_events:
                 new_gap = adjust_gap_start_for_window_activity(gap, events, window_events)
@@ -797,11 +801,11 @@ class AWAfkPromptState:
                         logger.debug(msg)
                     else:
                         logger.info(msg)
-                adjusted.append(new_gap)
+                adjusted.append((new_gap, gap.duration))
             # Keep only currently-pending advanced gaps so the set stays bounded and a
             # gap that disappears then reappears is logged afresh.
             self._logged_advances = logged_now
-            pseudo_afk_events = adjusted
+            gap_pairs = adjusted
 
         # Re-present any gaps that previously expired from the depth window but were
         # never answered.  Purge ones that have since been answered (has_event → True).
@@ -813,14 +817,14 @@ class AWAfkPromptState:
             yield gap
 
         buffered_now = get_utc_now() - datetime.timedelta(seconds=recency_thresh)
-        for event in pseudo_afk_events:
+        for event, raw_duration in gap_pairs:
             if event.timestamp in deferred_timestamps:
                 continue  # already yielded via deferred path above
-            long_enough = event.duration.total_seconds() > durration_thresh
+            long_enough = raw_duration.total_seconds() > durration_thresh
             recent_enough = event.timestamp + event.duration > buffered_now
             logger.debug(
                 f"  Checking gap at {event.timestamp.astimezone(LOCAL_TIMEZONE).strftime('%H:%M:%S')}: "
-                f"long_enough={long_enough} ({event.duration.total_seconds():.1f}s > {durration_thresh}s), "
+                f"long_enough={long_enough} (raw {raw_duration.total_seconds():.1f}s > {durration_thresh}s), "
                 f"recent_enough={recent_enough}"
             )
             if long_enough and recent_enough:

@@ -338,6 +338,39 @@ def test_get_unseen_afk_events_with_window_advances_gap_start():
     assert int(unseen[0].duration.total_seconds()) == 360
 
 
+def test_eligibility_uses_raw_gap_duration_not_adjusted():
+    """A gap's prompt-worthiness is judged on its raw duration, not the adjusted one.
+
+    The idle-countdown adjustment shrinks a gap by ~2 min. If eligibility were
+    checked on the adjusted duration, a raw 8-min gap with a 6-min adjusted
+    duration would be listed with a 7-min threshold in a scan where the window
+    data is missing/late, and silently dropped in the next — the source of
+    "skipped now, prompted later, out of order" (observed 2026-07-10/16 with
+    raw ~6-7 min gaps against the 5-min threshold).
+
+    The yielded event still carries the adjusted start/duration — only the
+    threshold check uses the raw span.
+    """
+    afk_events = [
+        _tuple_to_event(t)
+        for t in [
+            (0, 120, NOT_AFK),
+            (240, 360, AFK),
+            (600, 60, NOT_AFK),
+        ]
+    ]
+    window_events = [_make_window_event(120, 120)]
+
+    # Raw gap: 120-600 (480 s). Adjusted: 240-600 (360 s). Threshold 400 s sits
+    # between the two: raw qualifies, adjusted alone would not.
+    state = AWAfkPromptState([])
+    unseen = list(state.get_unseen_afk_events(afk_events, INF, 400, window_events))
+
+    assert len(unseen) == 1, "gap must stay eligible — its raw duration is above the threshold"
+    assert unseen[0].timestamp == FIRST_DATE + datetime.timedelta(seconds=240)
+    assert int(unseen[0].duration.total_seconds()) == 360
+
+
 def test_advance_gap_logged_once_across_polls(caplog):
     """The 'Advancing gap start' INFO line is logged once per gap, not every poll.
 
