@@ -27,6 +27,22 @@ from aw_watcher_afk_prompt.utils import format_age, format_duration, format_time
 # keeps scanning in the meantime, so nothing is lost — just not asked about yet.
 SNOOZE_SECONDS = 300
 
+# How far the reported start of the ongoing AFK period may wobble between fetches
+# and still count as the same period (the server sometimes returns duplicated,
+# millisecond-offset events). A real return-and-leave-again moves it by minutes.
+_SAME_PERIOD_TOLERANCE_SECONDS = 5.0
+
+
+def _timeout_ms(minutes: float | None) -> int | None:
+    """Convert a prompt-timeout setting in minutes to ms.
+
+    None, 0 and negative values all mean "no timeout" — a negative Tk ``after``
+    delay fires immediately, which would auto-snooze every dialog on sight.
+    """
+    if not minutes or minutes < 0:
+        return None
+    return int(minutes * 60_000)
+
 
 def _make_prompt_text(event: aw_core.Event, stale_minutes: float) -> str:
     """The question for a completed AFK period, including how stale it is.
@@ -98,6 +114,8 @@ def prompt(
     queue_info: dict | None = None,
     stale_minutes: float = 15.0,
     refresh: Callable[[], dict] | None = None,
+    timeout_ms: int | None = None,
+    still_afk_check: Callable[[], bool] | None = None,
 ) -> str | None:
     title = "AFK Checkin"
 
@@ -110,6 +128,8 @@ def prompt(
         afk_duration_seconds=event.duration.total_seconds(),
         queue_info=queue_info,
         refresh=refresh,
+        timeout_ms=timeout_ms,
+        still_afk_check=still_afk_check,
     )
 
 
@@ -117,6 +137,7 @@ def prompt_ongoing(
     event: aw_core.Event,
     recent_events,
     still_afk_check=None,
+    timeout_ms: int | None = None,
     refresh: Callable[[], dict] | None = None,
 ) -> str | None:
     """Show a live-updating dialog for an AFK period that is still in progress.
@@ -129,6 +150,9 @@ def prompt_ongoing(
     This dialog is only shown once no *earlier* completed unfilled periods remain
     (those are prompted oldest-first beforehand — see ``_handle_still_afk``), so
     it always represents the most recent, still-running period.
+
+    ``timeout_ms`` is honoured only after the user has returned: hiding a dialog
+    the user never had a chance to see would defeat its purpose.
     """
     start_time_str = format_time_local(event.timestamp)
     prompt_text = f"What were you doing from {start_time_str}? (still AFK)"
@@ -140,6 +164,7 @@ def prompt_ongoing(
         afk_duration_seconds=None,
         is_ongoing=True,
         still_afk_check=still_afk_check,
+        timeout_ms=timeout_ms,
         refresh=refresh,
     )
 
@@ -198,6 +223,7 @@ def _process_events(
     stale_minutes: float = 15.0,
     rescan: Callable[[], list[aw_core.Event]] | None = None,
     ongoing_check: Callable[[], bool] | None = None,
+    timeout_ms: int | None = None,
 ) -> bool:
     """Prompt the user for each unfilled AFK period, oldest first.
 
@@ -211,7 +237,9 @@ def _process_events(
     pretending to be the only open interval.
 
     The same refresh happens *while* a dialog is open (see ``_make_refresh``), so
-    an unanswered prompt updates its own age and count instead of going stale.
+    an unanswered prompt updates its own age and count instead of going stale, and
+    ``timeout_ms`` hides it after a while so it can be re-raised rather than lost
+    behind other windows.
 
     Split responses are posted as multiple activities, and normal responses are
     posted as a single event.
@@ -245,6 +273,10 @@ def _process_events(
                 rescan=rescan,
                 ongoing_check=ongoing_check,
             ),
+            timeout_ms=timeout_ms,
+            # "Is an AFK period running?" doubles as "is the user away?", which the
+            # dialog needs so it doesn't count down while nobody can see it.
+            still_afk_check=ongoing_check,
         )
         if response is None:
             logger.info(
@@ -341,6 +373,27 @@ def _handle_still_afk(state: AWAfkPromptClient, args, prompted_ongoing_start) ->
         except (ConnectionError, HTTPError) as e:
             logger.warning(f"Pending-period check failed: {e}")
 
+    def still_in_this_afk_period() -> bool:
+        """True while the *same* AFK period is still running.
+
+        Comparing start timestamps matters: a brief touch ends this period and
+        starts a new one, and a plain "is the user AFK now?" check would answer
+        yes — leaving the live dialog ticking as though a ten-minute absence had
+        been hours of continuous AFK time.
+
+        Compared with a tolerance, not exactly: the server is known to return
+        duplicated, millisecond-offset afk events (which is why ``has_event``
+        compares with an overlap ratio), and a start that wobbles by a millisecond
+        must not be read as the user coming back — that would freeze the counter
+        and suppress the dialog for the rest of the period. A real touch moves the
+        start by at least ``--length``, far beyond this tolerance.
+        """
+        current = state.get_ongoing_afk_event(args.length * 60)
+        if current is None:
+            return False
+        drift = abs((current.timestamp - ongoing.timestamp).total_seconds())
+        return drift <= _SAME_PERIOD_TOLERANCE_SECONDS
+
     def ongoing_queue_refresh() -> dict:
         """Recount what is waiting behind the live dialog while it sits open.
 
@@ -367,6 +420,7 @@ def _handle_still_afk(state: AWAfkPromptClient, args, prompted_ongoing_start) ->
             stale_minutes=args.stale_warning,
             rescan=_rescan_hook(state, args),
             ongoing_check=_ongoing_check(state, args),
+            timeout_ms=_timeout_ms(args.prompt_timeout),
         )
         return _StillAfkResult(prompted_ongoing_start, snoozed=snoozed, deep_scan="now")
 
@@ -374,7 +428,8 @@ def _handle_still_afk(state: AWAfkPromptClient, args, prompted_ongoing_start) ->
     response = prompt_ongoing(
         ongoing,
         state.state.recent_events,
-        still_afk_check=_ongoing_check(state, args),
+        still_afk_check=still_in_this_afk_period,
+        timeout_ms=_timeout_ms(args.prompt_timeout),
         refresh=ongoing_queue_refresh if args.backfill else None,
     )
     _post_ongoing_response(state, ongoing, response, min_active=args.min_active)
@@ -517,6 +572,13 @@ def main() -> None:
         "(default: from config or 15).",
     )
     parser.add_argument(
+        "--prompt-timeout",
+        type=float,
+        default=config.get("prompt_timeout", 5),
+        help="Hide an unanswered prompt after this many minutes and re-ask later, so a "
+        "dialog buried under other windows isn't forgotten (default: from config or 5; 0 disables).",
+    )
+    parser.add_argument(
         "--min-active",
         type=float,
         default=config.get("min_active", 0.0),
@@ -550,11 +612,13 @@ def main() -> None:
         log_file=True,
     )
 
+    # A Tk without Xft renders the dialogs in a bitmap font and silently refuses
+    # non-ASCII input, which is easy to mistake for a bug in this watcher.
+    aw_dialog.warn_on_degraded_tk()
+
     # Test dialog mode - show dialog immediately for UI testing
     if args.test_dialog:
         from datetime import UTC, datetime, timedelta
-
-        import aw_watcher_afk_prompt.dialog as aw_dialog
 
         # Create test AFK event data
         test_start = datetime.now(UTC) - timedelta(minutes=args.test_dialog_duration)
@@ -672,6 +736,7 @@ def main() -> None:
             # snoozed_until: no prompts before this time (the watcher keeps scanning).
             last_deep_scan = 0.0
             snoozed_until = 0.0
+            prompt_timeout_ms = _timeout_ms(args.prompt_timeout)
 
             rescan_deep = _rescan_hook(state, args)
             ongoing_check = _ongoing_check(state, args)
@@ -690,6 +755,7 @@ def main() -> None:
                     stale_minutes=args.stale_warning,
                     rescan=rescan_deep,
                     ongoing_check=ongoing_check,
+                    timeout_ms=prompt_timeout_ms,
                 ):
                     snoozed_until = time.monotonic() + SNOOZE_SECONDS
                 last_deep_scan = time.monotonic()
@@ -750,6 +816,7 @@ def main() -> None:
                                 stale_minutes=args.stale_warning,
                                 rescan=rescan_deep,
                                 ongoing_check=ongoing_check,
+                                timeout_ms=prompt_timeout_ms,
                             )
                             # After the queue run: its rescans kept the scan fresh
                             # throughout, however long the dialogs sat open.
@@ -761,6 +828,7 @@ def main() -> None:
                                 context="AFK check",
                                 stale_minutes=args.stale_warning,
                                 ongoing_check=ongoing_check,
+                                timeout_ms=prompt_timeout_ms,
                             )
                         if snoozed:
                             snoozed_until = time.monotonic() + SNOOZE_SECONDS

@@ -47,6 +47,39 @@ def open_link(link: str) -> None:
     webbrowser.open(link)
 
 
+def tk_font_system() -> str | None:
+    """Which font backend this Tk build uses: "xft", "x11", or None if unknown.
+
+    Only X11 builds answer this at all. "x11" means the build was compiled
+    *without* Xft: it falls back to core X bitmap fonts and to the legacy
+    keyboard-input path, so dialogs render in "fixed" and non-ASCII characters
+    (æøå) cannot be typed into them. The interpreters uv downloads
+    (python-build-standalone) ship such a Tk; distro Pythons do not.
+    """
+    try:
+        return root.tk.call("::tk::pkgconfig", "get", "fontsystem")
+    except tk.TclError:
+        return None
+
+
+def warn_on_degraded_tk() -> str | None:
+    """Log a warning when the Tk build cannot render/accept non-ASCII text.
+
+    Returns the font system so callers (and tests) can see what was found.
+    """
+    font_system = tk_font_system()
+    if font_system == "x11":
+        import sys
+
+        logger.warning(
+            "This Tk build has no Xft support (fontsystem=x11): dialogs use the bitmap "
+            "'fixed' font and non-ASCII characters cannot be typed into them. The "
+            f"interpreter in use is {sys.executable} — reinstall with 'make install', "
+            "which builds against a system Python (see README: Installation)."
+        )
+    return font_system
+
+
 class _AbbreviationStore(UserDict[str, str]):
     """A class to store abbreviations and their expansions.
 
@@ -211,6 +244,7 @@ class AWAfkPromptDialog(simpledialog.Dialog):
         is_ongoing: bool = False,
         still_afk_check=None,
         refresh=None,
+        timeout_ms: int | None = None,
     ) -> None:
         self.prompt = prompt
         self.history = history
@@ -227,10 +261,14 @@ class AWAfkPromptDialog(simpledialog.Dialog):
         # waited: {"prompt": str, "queue_info": dict | None}. A missing key means
         # "unchanged" (e.g. a failed recount), so it can report partial updates.
         self.refresh = refresh
+        # Auto-snooze an unanswered dialog after this many ms (None/0 = never).
+        self.timeout_ms = timeout_ms
         self._returned = False
         self._live_timer = None
         self._afk_poll_timer = None
+        self._afk_poll_interval_ms = _AFK_POLL_INTERVAL_MS
         self._refresh_timer = None
+        self._timeout_timer = None
         super().__init__(root, title)
 
     # @override (when we get to 3.12)
@@ -290,10 +328,14 @@ class AWAfkPromptDialog(simpledialog.Dialog):
             # Once the user types, they're back: the period is assumed over, so
             # stop the live counter and drop the "still AFK" wording.
             self.entry.bind("<KeyPress>", self._mark_returned, add="+")
-            # Also notice when the OS afk watcher reports the user is active again,
-            # even if they haven't touched our dialog yet.
-            if self.still_afk_check is not None:
-                self._afk_poll_timer = self.after(_AFK_POLL_INTERVAL_MS, self._poll_afk)
+
+        # Notice when the OS afk watcher reports the user is active again, even if
+        # they haven't touched the dialog yet. An ongoing dialog needs this promptly
+        # (it freezes its counter); any other dialog only needs it to know there is
+        # finally someone there to see it, so it polls at the slower cadence.
+        if self.still_afk_check is not None:
+            self._afk_poll_interval_ms = _AFK_POLL_INTERVAL_MS if self.is_ongoing else _REFRESH_INTERVAL_MS
+            self._afk_poll_timer = self.after(self._afk_poll_interval_ms, self._poll_afk)
 
         # Queue info label: shown when multiple AFK intervals are pending. Always
         # built (but only gridded while non-empty) so a queue that appears or grows
@@ -307,6 +349,20 @@ class AWAfkPromptDialog(simpledialog.Dialog):
         # minutes ago" an hour later, or that it is the only interval waiting.
         if self.refresh is not None:
             self._refresh_timer = self.after(_REFRESH_INTERVAL_MS, self._refresh_tick)
+
+        # Auto-snooze if ignored: a dialog buried under other windows would
+        # otherwise be lost and forgotten. Snoozing hides it for a few minutes and
+        # the main loop re-raises it, re-scanned and up to date. Typing restarts the
+        # countdown so it can't self-destruct mid-sentence.
+        if self.timeout_ms:
+            # Don't burn the fuse while nobody is at the keyboard: the user hasn't had
+            # a chance to see the dialog, and it would spend half its life hidden —
+            # quite possibly at the moment they sit down. This covers the ongoing
+            # dialog and the completed periods prompted while the user is still away.
+            # _mark_returned arms the countdown once they are back.
+            if not self.is_ongoing and not self._user_is_away():
+                self._arm_timeout()
+            self.bind("<KeyPress>", self._arm_timeout, add="+")
 
         return self.entry
 
@@ -326,7 +382,7 @@ class AWAfkPromptDialog(simpledialog.Dialog):
                 setattr(self, name, None)
 
     def _cancel_all_timers(self) -> None:
-        self._cancel_timers("_live_timer", "_afk_poll_timer", "_refresh_timer")
+        self._cancel_timers("_live_timer", "_afk_poll_timer", "_refresh_timer", "_timeout_timer")
 
     def _set_prompt_text(self, text: str) -> None:
         """Update the prompt label, keeping the "user is back" wording consistent."""
@@ -356,6 +412,19 @@ class AWAfkPromptDialog(simpledialog.Dialog):
             self._queue_var.set(_queue_text(self.queue_info))
             self._grid_queue_label()
 
+    def _arm_timeout(self, event=None) -> None:  # noqa: ARG002
+        """(Re)start the ignored-for-too-long countdown."""
+        if not self.timeout_ms:
+            return
+        self._cancel_timers("_timeout_timer")
+        self._timeout_timer = self.after(self.timeout_ms, self._auto_snooze)
+
+    def _auto_snooze(self) -> None:
+        """Nobody answered in time: close as a snooze so the main loop re-asks."""
+        self._timeout_timer = None
+        logger.info(f"Dialog unanswered for {self.timeout_ms // 1000}s — auto-snoozing; it will be re-raised later")
+        self.cancel_with_snooze()
+
     def _make_duration_text(self) -> str:
         from datetime import UTC, datetime
 
@@ -364,21 +433,30 @@ class AWAfkPromptDialog(simpledialog.Dialog):
         elapsed = datetime.now(UTC) - self.afk_start
         return f"Time away so far: {format_duration(elapsed)} (updating...)"
 
-    def _poll_afk(self) -> None:
-        """Check whether the OS afk watcher still reports the user as AFK.
+    def _user_is_away(self) -> bool:
+        """Does the OS afk watcher still report the user as AFK?
 
-        When it no longer does, the user has returned, so freeze the dialog even
+        False when there is nothing to ask. An error counts as "away": we would
+        rather keep the dialog on screen than hide one nobody has seen.
+        """
+        if self.still_afk_check is None:
+            return False
+        try:
+            return bool(self.still_afk_check())
+        except Exception:
+            logger.exception("still_afk_check failed; assuming the user is still away")
+            return True
+
+    def _poll_afk(self) -> None:
+        """Watch for the user coming back.
+
+        When they do, freeze the dialog (and start the unanswered countdown) even
         if they haven't typed into it yet.
         """
-        try:
-            still_afk = self.still_afk_check()
-        except Exception:
-            logger.exception("still_afk_check failed; assuming user still AFK")
-            still_afk = True
-        if not still_afk:
+        if not self._user_is_away():
             self._mark_returned()
             return
-        self._afk_poll_timer = self.after(_AFK_POLL_INTERVAL_MS, self._poll_afk)
+        self._afk_poll_timer = self.after(self._afk_poll_interval_ms, self._poll_afk)
 
     def _mark_returned(self, event=None) -> None:  # noqa: ARG002
         """The user is back (they typed, or the afk watcher reports activity):
@@ -399,6 +477,9 @@ class AWAfkPromptDialog(simpledialog.Dialog):
         # Drop the trailing "(still AFK)" marker from the prompt label.
         if hasattr(self, "_prompt_label"):
             self._set_prompt_text(self._prompt_label.cget("text"))
+        # The countdown was held back while the user was away; now that they are
+        # back, start it so the dialog doesn't sit forever if they wander off.
+        self._arm_timeout()
 
     def _tick_duration(self) -> None:
         if hasattr(self, "_duration_var"):
@@ -702,6 +783,7 @@ def ask_string(
     is_ongoing: bool = False,
     still_afk_check=None,
     refresh=None,
+    timeout_ms: int | None = None,
 ) -> str | None | tuple:
     """Ask for a string input, with optional split mode support.
 
@@ -714,6 +796,7 @@ def ask_string(
         initial_value: Pre-fill the entry with this value (for editing)
         refresh: Callable re-read once a minute for facts that go stale while the
             dialog waits: {"prompt": str, "queue_info": dict | None}
+        timeout_ms: Auto-snooze an unanswered dialog after this long (None = never)
 
     Returns:
         String input from user, or None if cancelled
@@ -733,6 +816,7 @@ def ask_string(
             is_ongoing=is_ongoing,
             still_afk_check=still_afk_check,
             refresh=refresh,
+            timeout_ms=timeout_ms,
         )
 
         # Pre-fill with initial value or text from split mode

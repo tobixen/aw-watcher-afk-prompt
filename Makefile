@@ -23,8 +23,14 @@ install:  ## Install the package (auto-detects root, uv, pipx, or pip)
 		echo "Running as root, installing system-wide..."; \
 		pip install .; \
 	elif command -v uv >/dev/null 2>&1; then \
-		echo "Installing with uv..."; \
-		uv tool install --reinstall .; \
+		echo "Installing with uv (system Python)..."; \
+		uv tool install --reinstall --no-managed-python . \
+		|| { \
+			echo "WARNING: no usable system Python found; falling back to a uv-managed one."; \
+			echo "         Its bundled Tk has no Xft support, so the dialogs will use a"; \
+			echo "         bitmap font and refuse non-ASCII input (see README)."; \
+			uv tool install --reinstall .; \
+		}; \
 	elif command -v pipx >/dev/null 2>&1; then \
 		echo "Installing with pipx..."; \
 		pipx install --force .; \

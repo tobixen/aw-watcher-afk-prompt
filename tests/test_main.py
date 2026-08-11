@@ -299,7 +299,7 @@ class TestHandleStillAfk:
     oldest interval first, not the most recent one."""
 
     def _args(self, *, backfill: bool = True) -> SimpleNamespace:
-        return SimpleNamespace(backfill=backfill, length=5.0, stale_warning=15.0, min_active=0.0)
+        return SimpleNamespace(backfill=backfill, length=5.0, stale_warning=15.0, min_active=0.0, prompt_timeout=5.0)
 
     def _ongoing_event(self, minute: int = 57) -> aw_core.Event:
         ts = datetime(2026, 6, 7, 11, minute, 0, tzinfo=UTC)
@@ -594,6 +594,58 @@ class TestLiveRefresh:
         assert all(callable(r) for r in refreshes)
 
 
+class TestPromptTimeout:
+    """A dialog nobody answered should hide itself and come back later, so it
+    can't be buried under other windows and forgotten."""
+
+    def test_timeout_threads_through_to_the_dialog(self, monkeypatch) -> None:
+        captured: dict = {}
+
+        def fake_ask_string(title, prompt_text, history, **kwargs):  # noqa: ARG001
+            captured.update(kwargs)
+            return None
+
+        monkeypatch.setattr(main.aw_dialog, "ask_string", fake_ask_string)
+        main.prompt(_event(10), [], timeout_ms=90_000)
+
+        assert captured["timeout_ms"] == 90_000
+
+    def test_process_events_threads_the_timeout_to_each_prompt(self, monkeypatch) -> None:
+        captured: list = []
+
+        def fake_prompt(event, recent_events, timeout_ms=None, **kw):  # noqa: ARG001
+            captured.append(timeout_ms)
+            return "x"
+
+        monkeypatch.setattr(main, "prompt", fake_prompt)
+        main._process_events(_fake_state(), [_event(10)], context="Test", timeout_ms=42)
+
+        assert captured == [42]
+
+    def test_ongoing_prompt_gets_the_timeout_too(self, monkeypatch) -> None:
+        """The dialog itself defers the countdown until the user is back, so it
+        is safe (and necessary) to hand it the timeout up front."""
+        captured: dict = {}
+
+        def fake_ask_string(title, prompt_text, history, **kwargs):  # noqa: ARG001
+            captured.update(kwargs)
+            return None
+
+        monkeypatch.setattr(main.aw_dialog, "ask_string", fake_ask_string)
+        ongoing = aw_core.Event(id=None, timestamp=datetime.now(UTC) - timedelta(minutes=5), duration=timedelta(0))
+        main.prompt_ongoing(ongoing, [], timeout_ms=90_000)
+
+        assert captured["timeout_ms"] == 90_000
+
+    def test_timeout_minutes_convert_to_milliseconds(self) -> None:
+        assert main._timeout_ms(5.0) == 300_000
+        assert main._timeout_ms(0.5) == 30_000
+
+    def test_zero_disables_the_timeout(self) -> None:
+        assert main._timeout_ms(0) is None
+        assert main._timeout_ms(None) is None
+
+
 class TestQueueCountSurvivesTheUserWanderingOff:
     """The usual reason a dialog sits unanswered is that nobody is at the keyboard —
     so the recount must keep working while the user is AFK. A scan that bails out
@@ -639,6 +691,7 @@ class TestOngoingDialogQueue:
             length=5.0,
             stale_warning=15.0,
             min_active=0.0,
+            prompt_timeout=5.0,
             backfill_depth=1440.0,
         )
 
@@ -700,3 +753,119 @@ class TestOngoingDialogQueue:
         main._handle_still_afk(state, self._args(), prompted_ongoing_start=None)
 
         assert "queue_info" not in captured["refresh"]()
+
+
+class TestTimeoutWaitsForSomeoneToSeeIt:
+    """A countdown burning down on a dialog nobody can see defeats the point: the
+    prompt spends half its life hidden and may well be in its hidden phase at the
+    moment the user sits down. Dialogs raised while the user is away — including
+    the completed periods prompted from the still-AFK path — must therefore learn
+    when the user is back."""
+
+    def test_process_events_tells_the_dialog_whether_the_user_is_around(self, monkeypatch) -> None:
+        captured: dict = {}
+
+        def fake_prompt(event, recent_events, still_afk_check=None, **kw):  # noqa: ARG001
+            captured["check"] = still_afk_check
+            return None
+
+        monkeypatch.setattr(main, "prompt", fake_prompt)
+
+        def ongoing_check() -> bool:
+            return True
+
+        main._process_events(_fake_state(), [_event(10)], context="Test", ongoing_check=ongoing_check)
+
+        assert captured["check"] is ongoing_check
+
+    def test_prompt_forwards_the_check_to_the_dialog(self, monkeypatch) -> None:
+        captured: dict = {}
+
+        def fake_ask_string(title, prompt_text, history, **kwargs):  # noqa: ARG001
+            captured.update(kwargs)
+            return None
+
+        monkeypatch.setattr(main.aw_dialog, "ask_string", fake_ask_string)
+        sentinel = object()
+        main.prompt(_event(10), [], still_afk_check=sentinel)
+
+        assert captured["still_afk_check"] is sentinel
+
+    def test_negative_timeout_is_treated_as_disabled(self) -> None:
+        """A negative after() delay fires immediately — the dialog would
+        auto-snooze the instant it opened, forever."""
+        assert main._timeout_ms(-1) is None
+
+
+class TestStillAfkCheckIsPeriodSpecific:
+    """Returning briefly and leaving again starts a *new* AFK period. The live
+    dialog for the old period must then stop ticking instead of pretending the
+    user never came back (which is how a 10-minute absence ended up displayed as
+    hours of continuous AFK time)."""
+
+    def _capture_check(self, monkeypatch, state, ongoing_start):
+        captured: dict = {}
+
+        def fake_prompt_ongoing(event, recent_events, still_afk_check=None, **kw):  # noqa: ARG001
+            captured["check"] = still_afk_check
+            return None
+
+        monkeypatch.setattr(main, "prompt_ongoing", fake_prompt_ongoing)
+        monkeypatch.setattr(main, "_post_ongoing_response", lambda *a, **k: None)
+        monkeypatch.setattr(main, "_deep_scan", lambda s, a, **k: [])  # noqa: ARG005
+        args = SimpleNamespace(
+            backfill=True, length=5.0, stale_warning=15.0, min_active=0.0, prompt_timeout=5.0, backfill_depth=1440.0
+        )
+        main._handle_still_afk(state, args, prompted_ongoing_start=ongoing_start)
+        return captured["check"]
+
+    def _ongoing(self, minute: int) -> aw_core.Event:
+        ts = datetime(2026, 6, 7, 7, minute, 0, tzinfo=UTC)
+        return aw_core.Event(id=None, timestamp=ts, duration=timedelta(minutes=10))
+
+    def test_same_period_still_afk(self, monkeypatch) -> None:
+        state = _fake_state()
+        period = self._ongoing(40)
+        state.get_ongoing_afk_event = MagicMock(return_value=period)
+
+        check = self._capture_check(monkeypatch, state, None)
+
+        assert check() is True
+
+    def test_new_period_means_the_user_came_back(self, monkeypatch) -> None:
+        state = _fake_state()
+        period = self._ongoing(40)
+        state.get_ongoing_afk_event = MagicMock(return_value=period)
+        check = self._capture_check(monkeypatch, state, None)
+
+        # The user touched the laptop at 07:50 and left again: a new AFK period.
+        state.get_ongoing_afk_event = MagicMock(return_value=self._ongoing(52))
+
+        assert check() is False
+
+    def test_millisecond_jitter_is_still_the_same_period(self, monkeypatch) -> None:
+        """The server is known to return duplicated, millisecond-offset afk events
+        (that is why has_event compares with an overlap ratio). A start that moves
+        by a millisecond must not be read as "the user came back" — that would
+        freeze the live dialog, strip the "(still AFK)" wording while the user is
+        still gone, and suppress the dialog for the rest of the period."""
+        state = _fake_state()
+        period = self._ongoing(40)
+        state.get_ongoing_afk_event = MagicMock(return_value=period)
+        check = self._capture_check(monkeypatch, state, None)
+
+        jittered = aw_core.Event(
+            id=None, timestamp=period.timestamp + timedelta(milliseconds=1), duration=period.duration
+        )
+        state.get_ongoing_afk_event = MagicMock(return_value=jittered)
+
+        assert check() is True
+
+    def test_not_afk_at_all(self, monkeypatch) -> None:
+        state = _fake_state()
+        state.get_ongoing_afk_event = MagicMock(return_value=self._ongoing(40))
+        check = self._capture_check(monkeypatch, state, None)
+
+        state.get_ongoing_afk_event = MagicMock(return_value=None)
+
+        assert check() is False

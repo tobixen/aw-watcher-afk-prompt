@@ -22,6 +22,19 @@ For a complete setup including systemd service:
 make install-all
 ```
 
+### A note on which Python you install against
+
+This is a Tk application, so it needs a Python whose Tk is built with **Xft**
+(`python3 -c "import tkinter; print(tkinter.Tk().tk.call('::tk::pkgconfig','get','fontsystem'))"`
+should print `xft`). Distro Pythons are fine. The interpreters `uv` downloads
+(python-build-standalone) are **not**: their bundled Tk has no Xft, which means
+the dialogs are drawn in the bitmap `fixed` font and you cannot type non-ASCII
+characters (æøå, ü, …) into them.
+
+`make install` therefore asks uv for a system Python (`--no-managed-python`). If
+you install by hand, do the same — and if a dialog ever shows up in an ugly
+bitmap font, that is the symptom; the watcher logs a warning about it at startup.
+
 ## Running
 
 ### Recommended: Using aw-qt
@@ -77,6 +90,10 @@ Available options:
 - `--depth`: Minutes to look into the past for events (default: from config or 10)
 - `--frequency`: Seconds between AFK event checks (default: from config or 5)
 - `--length`: Minimum AFK minutes before prompting (default: from config or 5)
+- `--prompt-timeout`: Minutes before an unanswered prompt hides itself and is
+  re-asked later, so it can't be buried under other windows and forgotten
+  (default: from config or 5; `0` disables). Typing restarts the countdown, and
+  the live "still AFK" dialog only starts it once you are back at the keyboard.
 - `--testing`: Run in testing mode
 - `--verbose`: Enable verbose logging
 

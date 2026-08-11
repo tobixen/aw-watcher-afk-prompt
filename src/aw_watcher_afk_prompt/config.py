@@ -41,6 +41,13 @@ backfill_interval = 10
 # Default: 15
 stale_warning = 15
 
+# Hide a prompt nobody answered after this many minutes and ask again later.
+# Prevents a dialog from being buried under other windows and forgotten: it comes
+# back re-scanned, with an updated age and queue count. Typing restarts the
+# countdown, and the "still AFK" dialog only starts it once you're back.
+# Default: 5 (0 disables the timeout).
+prompt_timeout = 5
+
 # Minimum duration (in seconds) for a not-afk event to count as "real" activity.
 # Not-afk events shorter than this are ignored, so brief laptop touches don't
 # split a long AFK period into smaller ones that fall below the threshold.
