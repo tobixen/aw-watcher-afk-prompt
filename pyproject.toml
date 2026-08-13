@@ -68,6 +68,11 @@ fmt = ["ruff check --fix {args:.}", "ruff format {args:.}"]
 [tool.ruff]
 target-version = "py311"
 line-length = 120
+# Ruff formats fenced code blocks in markdown, which is wrong for docs/: those are
+# historical design and code-review notes whose snippets are quoted to illustrate a
+# point. CODE_REVIEW.md, for one, shows `''` as an example of the wrong quote style —
+# "fixing" it would leave the prose arguing against the code right under it.
+extend-exclude = ["docs"]
 
 [tool.ruff.lint]
 select = [
