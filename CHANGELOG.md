@@ -7,12 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
+## [0.2.0] - 2026-08-12
 
-- **AFK periods could be silently lost when the laptop lid was open**: aw-watcher-lid posts a single "not-afk" event spanning the entire lid-open period, regardless of whether anyone is at the keyboard. Once such an event was finalized (on the next lid close), it covered any unanswered AFK gap inside it, making the gap invisible to gap detection forever. Lid events now only contribute AFK evidence (lid closed / suspend), never presence.
-- Answering the live "still AFK" dialog now stamps the period as ending when the afk watcher saw you return, rather than when you got around to clicking OK (which could overstate the period by minutes).
-- **Prompts could come out of order, and a period could be skipped in one round and then resurface alone in a later one.** It happened to AFK periods near the `length` threshold: eligibility was judged on the gap *after* subtracting the idle countdown (~2 minutes), and whether that subtraction applied at all depended on how many window events happened to be within reach. Eligibility is now judged on the full gap, and the window-event lookup is bounded to the time range being scanned. One consequence worth knowing: with a window watcher running, a gap whose full length passes `length` is now prompted about even though the duration it reports is a couple of minutes shorter.
-- The "Advancing gap start …" line is now logged at INFO only once per AFK period, then at DEBUG on repeats. Previously it was logged on every 5-second poll for as long as a gap kept being detected — answered gaps were already filtered, but a still-pending gap (e.g. while snoozed or queued) re-logged continuously and flooded the journal.
+### Added
+
+- Earlier unfilled AFK periods are now always prompted oldest-first, even while you are still away. When the live "still AFK" dialog would otherwise appear, the full backfill window is scanned first; any earlier *completed* periods are asked about oldest-first (each with "(N of total) — next: …" queue info), and the live dialog for the still-running period is shown only once those are cleared. Previously the live dialog appeared first (anchored at your most recent brief touch) and merely warned that earlier periods were pending.
+- A live-updating check-in dialog can now appear *before* you return to the computer, showing a ticking "time away so far" counter for the ongoing AFK period. It offers the same Split button as the normal prompt (clicking Split assumes the period ends now). When you come back — either by typing into the dialog or by the OS afk watcher detecting activity, even without touching the dialog — it freezes the counter and drops the "still AFK" wording. Answering it stamps the period as ending when the afk watcher saw you return, not when you got around to clicking OK. Returning briefly and leaving again also counts as coming back: that starts a *new* AFK period, and the dialog for the old one stops ticking instead of presenting a ten-minute absence as hours of continuous AFK time.
+- The full backfill-depth (e.g. 24 h) scan now also runs during normal operation — on a ~10-minute cadence (configurable via `backfill_interval`) and immediately before prompting — instead of only at startup. Missed AFK periods are picked up within ~10 minutes rather than waiting for the next restart. Prompts are always shown oldest-first with queue info ("(N of total) — next: …") so it's clear when more periods remain to be backfilled.
+- The check-in prompt now shows how long ago the AFK period ended (e.g. "5 minutes ago"), with a ⚠️ warning symbol for old periods (older than `stale_warning` minutes, default 15), so it's obvious when you're being prompted about a stale interval. The age keeps counting while the dialog waits, so a prompt left open doesn't insist the period ended "2 minutes ago" an hour later.
+- Log at INFO level when the prompt dialog is cancelled (previously silent, making it impossible to audit missed gaps from the journal).
+- Log a WARNING when an AFK gap expires from the depth window without being answered.
+- Advance the detected AFK gap start to the idle-timeout event when window activity exists during the 2-minute idle countdown, preventing the countdown window from being double-counted as both work and AFK time. Whether a period is long enough to ask about is still judged on the full gap, so a period just above `length` is still prompted about even though it now reports a couple of minutes less.
+- Retry posting events on transient server/network errors (ConnectionError, HTTP 5xx) with exponential backoff (up to 3 attempts), preventing re-prompting the user for the same gap after a momentary server hiccup.
 
 ### Changed
 
@@ -23,20 +29,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Snoozing no longer blocks the whole watcher in a 5-minute `time.sleep`. Instead, prompts are suppressed for 5 minutes while scanning continues in the background, so AFK periods that begin or end during the snooze are still tracked.
 - Snoozing a prompt now also stops the rest of the prompt queue (previously the next queued dialog popped up immediately after the 5-minute freeze). The remaining periods are re-presented after the snooze expires.
 
-### Added
-
-- Earlier unfilled AFK periods are now always prompted oldest-first, even while you are still away. When the live "still AFK" dialog would otherwise appear, the full backfill window is scanned first; any earlier *completed* periods are asked about oldest-first (each with "(N of total) — next: …" queue info), and the live dialog for the still-running period is shown only once those are cleared. Previously the live dialog appeared first (anchored at your most recent brief touch) and merely warned that earlier periods were pending.
-
-- A live-updating check-in dialog can now appear *before* you return to the computer, showing a ticking "time away so far" counter for the ongoing AFK period. It offers the same Split button as the normal prompt (clicking Split assumes the period ends now). When you come back — either by typing into the dialog or by the OS afk watcher detecting activity, even without touching the dialog — it freezes the counter and drops the "still AFK" wording. Returning briefly and leaving again also counts as coming back: that starts a *new* AFK period, and the dialog for the old one stops ticking instead of presenting a ten-minute absence as hours of continuous AFK time.
-- The full backfill-depth (e.g. 24 h) scan now also runs during normal operation — on a ~10-minute cadence (configurable via `backfill_interval`) and immediately before prompting — instead of only at startup. Missed AFK periods are picked up within ~10 minutes rather than waiting for the next restart. Prompts are always shown oldest-first with queue info ("(N of total) — next: …") so it's clear when more periods remain to be backfilled.
-- The check-in prompt now shows how long ago the AFK period ended (e.g. "5 minutes ago"), with a ⚠️ warning symbol for old periods (older than `stale_warning` minutes, default 15), so it's obvious when you're being prompted about a stale interval. The age keeps counting while the dialog waits, so a prompt left open doesn't insist the period ended "2 minutes ago" an hour later.
-- Log at INFO level when the prompt dialog is cancelled (previously silent, making it impossible to audit missed gaps from the journal).
-- Log a WARNING when an AFK gap expires from the depth window without being answered.
-- Advance the detected AFK gap start to the idle-timeout event when window activity exists during the 2-minute idle countdown, preventing the countdown window from being double-counted as both work and AFK time.
-- Retry posting events on transient server/network errors (ConnectionError, HTTP 5xx) with exponential backoff (up to 3 attempts), preventing re-prompting the user for the same gap after a momentary server hiccup.
-
 ### Fixed
 
+- **AFK periods could be silently lost when the laptop lid was open**: aw-watcher-lid posts a single "not-afk" event spanning the entire lid-open period, regardless of whether anyone is at the keyboard. Once such an event was finalized (on the next lid close), it covered any unanswered AFK gap inside it, making the gap invisible to gap detection forever. Lid events now only contribute AFK evidence (lid closed / suspend), never presence.
 - Gaps that expired from the depth window (too old to prompt about) were never marked as seen, causing them to be re-reported as expired on every poll cycle (~5s) indefinitely. This blocked new gaps from ever being detected and prompted about.
 
 ## [0.1.6] - 2026-03-07
@@ -113,7 +108,9 @@ all improvements made in the tobixen fork of the original `aw-watcher-ask-away`.
 - Use local timezone and locale-aware time format in dialogs
 - IndexError when history is empty
 
-[Unreleased]: https://github.com/tobixen/aw-watcher-afk-prompt/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/tobixen/aw-watcher-afk-prompt/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/tobixen/aw-watcher-afk-prompt/compare/v0.1.6...v0.2.0
+[0.1.6]: https://github.com/tobixen/aw-watcher-afk-prompt/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/tobixen/aw-watcher-afk-prompt/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/tobixen/aw-watcher-afk-prompt/compare/v0.1.1...v0.1.4
 [0.1.1]: https://github.com/tobixen/aw-watcher-afk-prompt/compare/v0.1.0...v0.1.1
