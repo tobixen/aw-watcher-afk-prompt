@@ -579,6 +579,13 @@ def main() -> None:
         "dialog buried under other windows isn't forgotten (default: from config or 5; 0 disables).",
     )
     parser.add_argument(
+        "--display-wait",
+        type=float,
+        default=config.get("display_wait", aw_dialog.DISPLAY_WAIT_MINUTES),
+        help="How many minutes to wait for the display server at startup before giving up "
+        "(default: from config or 15).",
+    )
+    parser.add_argument(
         "--min-active",
         type=float,
         default=config.get("min_active", 0.0),
@@ -611,6 +618,11 @@ def main() -> None:
         log_stderr=True,
         log_file=True,
     )
+
+    # Nothing here can prompt without a display server, and when started with the
+    # graphical session we may well be up before the compositor is. Wait for it
+    # (logging why we are waiting) instead of dying and being restarted.
+    aw_dialog.wait_for_display(args.display_wait)
 
     # A Tk without Xft renders the dialogs in a bitmap font and silently refuses
     # non-ASCII input, which is easy to mistake for a bug in this watcher.

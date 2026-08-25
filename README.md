@@ -94,6 +94,9 @@ Available options:
   re-asked later, so it can't be buried under other windows and forgotten
   (default: from config or 5; `0` disables). Typing restarts the countdown, and
   the live "still AFK" dialog only starts it once you are back at the keyboard.
+- `--display-wait`: Minutes to wait for the display server at startup before
+  giving up (default: from config or 15). Started with the graphical session, this
+  watcher can easily be up before the compositor is.
 - `--testing`: Run in testing mode
 - `--verbose`: Enable verbose logging
 

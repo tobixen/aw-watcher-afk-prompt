@@ -48,6 +48,12 @@ stale_warning = 15
 # Default: 5 (0 disables the timeout).
 prompt_timeout = 5
 
+# How long (in minutes) to keep waiting for the display server at startup before
+# giving up and exiting. A watcher started alongside the graphical session may
+# well come up before the compositor does.
+# Default: 15
+display_wait = 15
+
 # Minimum duration (in seconds) for a not-afk event to count as "real" activity.
 # Not-afk events shorter than this are ignored, so brief laptop touches don't
 # split a long AFK period into smaller ones that fall below the threshold.

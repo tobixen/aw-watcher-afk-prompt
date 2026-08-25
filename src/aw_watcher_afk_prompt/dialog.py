@@ -1,8 +1,10 @@
 import json
 import logging
 import re
+import time
 import tkinter as tk
 from collections import UserDict
+from collections.abc import Callable
 from itertools import chain
 from pathlib import Path
 from tkinter import messagebox, simpledialog, ttk
@@ -25,8 +27,74 @@ _REFRESH_INTERVAL_MS = 60_000
 # Trailing marker on the ongoing prompt, dropped once the user is back.
 _STILL_AFK_RE = re.compile(r"\s*\(still AFK\)\s*$")
 
-root = tk.Tk()
-root.withdraw()
+# How long to wait between attempts at reaching the display server, and for how
+# long in total, before the process gives up and lets its supervisor restart it.
+DISPLAY_RETRY_INTERVAL = 5.0
+DISPLAY_WAIT_MINUTES = 15.0
+
+# The hidden Tk root the dialogs in this module are parented to. Created on demand
+# rather than at import time: this watcher is typically started by systemd
+# alongside the graphical session, so the display server is regularly a few
+# seconds — or a compositor crash — away, and dying inside `import` gives no chance
+# to log why (see wait_for_display).
+#
+# Not the only root in the process, as much as it should be: ask_split_activities()
+# is called without a parent (see ask_string) and makes one of its own.
+_root: tk.Tk | None = None
+
+
+def get_root() -> tk.Tk:
+    """The hidden Tk root, created on first use.
+
+    Raises tk.TclError when there is no display server to connect to; callers
+    that can afford to wait for one should use wait_for_display first.
+    """
+    global _root
+    if _root is None:
+        _root = tk.Tk()
+        _root.withdraw()
+    return _root
+
+
+def wait_for_display(
+    timeout_minutes: float = DISPLAY_WAIT_MINUTES,
+    interval: float = DISPLAY_RETRY_INTERVAL,
+    sleep: Callable[[float], None] = time.sleep,
+) -> tk.Tk:
+    """Create the hidden Tk root, waiting for the display server to turn up.
+
+    Retrying in-process rather than exiting matters for a --user service started
+    with the session: a watcher that dies on a missing display restarts every
+    RestartSec, and systemd's start-limit eventually stops restarting it at all —
+    leaving no watcher and no prompts (which is precisely how the Wayland window
+    watcher, and with it the whole AFK feed, ended up dead after a reboot).
+
+    Gives up after timeout_minutes rather than waiting forever, so a genuinely
+    display-less machine leaves a reason in the log and an exit code behind
+    instead of holding a service "active" that can never prompt. The supervisor
+    is still free to start it again — the bundled unit deliberately lets it.
+    """
+    attempts = max(1, int(timeout_minutes * 60 / interval))
+    for attempt in range(1, attempts + 1):
+        try:
+            return get_root()
+        except tk.TclError as e:
+            if attempt == attempts:
+                logger.error(f"No display server after {timeout_minutes:.0f} minutes, giving up: {e}")
+                raise
+            # Once at WARNING so the reason is on the record, then quietly: this
+            # can be hundreds of attempts while a compositor starts up.
+            log = logger.warning if attempt == 1 else logger.debug
+            log(f"No display server yet ({e}), retrying every {interval:.0f}s for {timeout_minutes:.0f} minutes")
+            sleep(interval)
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
+def __getattr__(name: str):
+    """Keep the historical module-level ``dialog.root`` working, lazily."""
+    if name == "root":
+        return get_root()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def _queue_text(queue_info: dict | None) -> str:
@@ -57,7 +125,7 @@ def tk_font_system() -> str | None:
     (python-build-standalone) ship such a Tk; distro Pythons do not.
     """
     try:
-        return root.tk.call("::tk::pkgconfig", "get", "fontsystem")
+        return get_root().tk.call("::tk::pkgconfig", "get", "fontsystem")
     except tk.TclError:
         return None
 
@@ -269,7 +337,7 @@ class AWAfkPromptDialog(simpledialog.Dialog):
         self._afk_poll_interval_ms = _AFK_POLL_INTERVAL_MS
         self._refresh_timer = None
         self._timeout_timer = None
-        super().__init__(root, title)
+        super().__init__(get_root(), title)
 
     # @override (when we get to 3.12)
     def body(self, master):
@@ -681,7 +749,7 @@ class BatchEditDialog(simpledialog.Dialog):
         self.format_time = format_time_func
         self.entries: list[ttk.Entry] = []
         self.result: list[tuple] | None = None  # List of (event, new_value) tuples
-        super().__init__(root, title)
+        super().__init__(get_root(), title)
 
     def body(self, master):
         master = ttk.Frame(master)

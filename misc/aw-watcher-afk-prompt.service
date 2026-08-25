@@ -11,7 +11,10 @@
 #
 # Prerequisites:
 # - aw-server must be installed and running
-# - aw-watcher-afk must be running (afk-prompt monitors AFK events)
+# - Something must be writing the aw-watcher-afk bucket, since that feed is where
+#   AFK periods are detected: aw-watcher-afk, or aw-watcher-window-wayland, which
+#   reports AFK status too. Without it this watcher has nothing to prompt about
+#   (it now says so in a dialog rather than going quiet, see `feed_stale`).
 # - This watcher must be installed (make install)
 #
 # Installation for X11 users:
@@ -25,7 +28,8 @@
 #   exec systemctl --user import-environment WAYLAND_DISPLAY
 # - This ensures the service can access your Wayland display
 #
-# The watcher will automatically retry connection to aw-server if it's not ready yet.
+# The watcher will automatically retry connection to aw-server if it's not ready
+# yet, and waits for the display server at startup (see `display_wait`).
 #
 
 [Unit]
@@ -34,6 +38,11 @@ Documentation=https://github.com/tobixen/aw-watcher-afk-prompt
 After=aw-server.service
 # Ensure we run within a graphical session
 After=graphical-session.target
+# Never stop restarting. The default rate limit (5 starts / 10s) is what turned a
+# transient startup failure into a permanently dead aw-watcher-window-wayland —
+# and a watcher systemd has given up on prompts for nothing, forever, silently.
+# RestartSec below keeps the retry rate sane on its own.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple

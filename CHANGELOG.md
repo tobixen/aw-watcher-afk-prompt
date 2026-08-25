@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The watcher no longer dies when the display server isn't up yet.** The hidden Tk root was created at import time, so starting before the compositor killed the process inside `import`, before logging was even configured — 92 identical tracebacks in one observed reboot. The root is now created on demand, and startup waits for the display server (retrying every 5s for `display_wait` minutes, default 15) with the reason in the log. The bundled systemd unit also sets `StartLimitIntervalSec=0`: systemd's default rate limit is what turns a transient startup failure into a permanently dead watcher, which is exactly how the Wayland window watcher — and with it the whole AFK feed — stayed dead after a reboot.
+
 ## [0.2.0] - 2026-08-12
 
 ### Added

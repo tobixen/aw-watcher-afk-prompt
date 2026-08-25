@@ -15,8 +15,10 @@ import tkinter as tk
 
 import pytest
 
+import aw_watcher_afk_prompt.dialog as aw_dialog
+
 try:
-    import aw_watcher_afk_prompt.dialog as aw_dialog
+    aw_dialog.get_root()  # importing is display-free; these tests are not
 except tk.TclError:  # pragma: no cover - depends on the test environment
     pytest.skip("No display available", allow_module_level=True)
 
