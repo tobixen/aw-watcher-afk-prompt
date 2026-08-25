@@ -33,6 +33,11 @@ DATA_KEY = "message"
 _POST_MAX_RETRIES = 13  # 1 initial attempt + 12 retries × 10 s ≈ 2 minutes
 _POST_RETRY_INTERVAL = 10  # seconds between retries on transient errors
 
+# How long a not-afk event keeps meaning "the user is here" after it stopped
+# growing. Comfortably above what a live feed does: aw-watcher-window-wayland
+# reports in ~85 s chunks with gaps of up to ~2 minutes while someone sits there.
+PRESENCE_TIMEOUT_SECONDS = 300
+
 
 def _is_transient_error(exc: Exception) -> bool:
     """Return True for errors that are worth retrying (server/network glitches)."""
@@ -192,17 +197,39 @@ def adjust_gap_start_for_window_activity(
     return aw_core.Event(None, afk_event_start, new_duration, gap.data)
 
 
-def get_ongoing_afk_start(events: list[aw_core.Event]) -> datetime.datetime | None:
+def is_currently_afk(events: list[aw_core.Event], stale_after: float = PRESENCE_TIMEOUT_SECONDS) -> bool:
+    """Is the user away right now, as far as the feed can say?
+
+    An afk event says so itself. A not-afk event only means "present" while it is
+    *fresh*: a live watcher keeps extending its newest event, so a not-afk event
+    that stopped growing ``stale_after`` seconds ago means the user left then --
+    or that the feed died, which from here looks the same and is handled the same
+    (both mean: stop believing anyone is at the keyboard).
+
+    Reading a stale not-afk event as presence is what kept this watcher silent
+    through a whole night: the feed's last word was a not-afk event from the
+    previous morning, so it believed the user was sitting there for 20 hours,
+    prompted about nothing, and never showed the ongoing-AFK dialog either.
+    """
+    if not events:
+        return False
+    most_recent = events[-1]
+    if is_afk(most_recent):
+        return True
+    end = most_recent.timestamp + most_recent.duration
+    return (get_utc_now() - end).total_seconds() >= stale_after
+
+
+def get_ongoing_afk_start(
+    events: list[aw_core.Event], stale_after: float = PRESENCE_TIMEOUT_SECONDS
+) -> datetime.datetime | None:
     """Return the start of the currently-ongoing AFK period, or None if not currently AFK.
 
     The start is defined as the end of the last not-afk event (when activity stopped).
-    Returns None if the most recent event is not-afk, the list is empty, or there are
-    no not-afk events to anchor the start.
+    Returns None when the user is present (see is_currently_afk), the list is empty,
+    or there are no not-afk events to anchor the start.
     """
-    if not events:
-        return None
-    most_recent = events[-1]
-    if not is_afk(most_recent):
+    if not is_currently_afk(events, stale_after):
         return None
     non_afk = [e for e in events if not is_afk(e)]
     if not non_afk:
@@ -610,7 +637,7 @@ class AWAfkPromptClient:
         # Most recent event is LAST after sorting (ascending order)
         if all_events:
             most_recent = all_events[-1]  # Last element is most recent
-            currently_afk = is_afk(most_recent)
+            currently_afk = is_currently_afk(all_events)
             logger.debug(
                 f"Most recent event: {most_recent.timestamp.astimezone(LOCAL_TIMEZONE).strftime('%H:%M:%S')} | "
                 f"status={most_recent.data.get('status')} | currently_afk={currently_afk}"

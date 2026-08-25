@@ -3,7 +3,12 @@ import datetime
 
 import aw_core
 
-from aw_watcher_afk_prompt.core import AWAfkPromptState, adjust_gap_start_for_window_activity, get_ongoing_afk_start
+from aw_watcher_afk_prompt.core import (
+    AWAfkPromptState,
+    adjust_gap_start_for_window_activity,
+    get_ongoing_afk_start,
+    is_currently_afk,
+)
 
 AFK = "afk"
 NOT_AFK = "not-afk"
@@ -725,15 +730,51 @@ def test_backfill_finds_completed_gaps_while_currently_afk():
     assert abs(gap.duration.total_seconds() - 30 * 60) < 1
 
 
+def _recent(seconds_ago: float, duration: float, status: str) -> aw_core.Event:
+    """An event ending ``seconds_ago`` seconds before now, of the given length."""
+    now = datetime.datetime.now(datetime.UTC)
+    return aw_core.Event(
+        timestamp=now - datetime.timedelta(seconds=seconds_ago + duration),
+        duration=datetime.timedelta(seconds=duration),
+        data={"status": status},
+    )
+
+
 def test_get_ongoing_afk_start_returns_none_when_not_afk():
-    """Returns None when most recent event is not-afk."""
-    events: list[TupleEvent] = [
-        (0, 60, NOT_AFK),
-        (60, 30, AFK),
-        (90, 10, NOT_AFK),
-    ]
-    result = get_ongoing_afk_start([_tuple_to_event(t) for t in events])
-    assert result is None
+    """Returns None when the feed says, recently, that the user is present."""
+    events = [_recent(300, 60, NOT_AFK), _recent(120, 60, AFK), _recent(0, 10, NOT_AFK)]
+    assert get_ongoing_afk_start(events) is None
+
+
+def test_a_live_feed_reporting_in_bursts_is_not_afk():
+    """Real aw-watcher-window-wayland data: while the user sits there, not-afk
+    events arrive in ~85s chunks with gaps of up to ~2 minutes between them. None
+    of those gaps may be read as the user having left."""
+    events = [_recent(200, 85, NOT_AFK), _recent(122, 85, NOT_AFK), _recent(0, 83, NOT_AFK)]
+    assert not is_currently_afk(events)
+    assert get_ongoing_afk_start(events) is None
+
+
+def test_a_stale_not_afk_event_does_not_mean_present():
+    """The bug behind a whole night going unprompted: the feed died mid-not-afk
+    event, and "the newest event says not-afk" was read as "the user is here" --
+    for 20 hours, so neither the ongoing prompt nor gap detection ever fired."""
+    events = [_recent(20 * 3600 + 60, 60, NOT_AFK), _recent(20 * 3600, 60, NOT_AFK)]
+    assert is_currently_afk(events)
+    afk_start = get_ongoing_afk_start(events)
+    assert afk_start is not None
+    away = (datetime.datetime.now(datetime.UTC) - afk_start).total_seconds()
+    assert 20 * 3600 <= away < 20 * 3600 + 30  # away since that event ended
+
+
+def test_a_stale_afk_event_still_means_afk():
+    """An explicit afk event needs no freshness test -- it says so itself."""
+    events = [_recent(20 * 3600 + 60, 60, NOT_AFK), _recent(20 * 3600, 60, AFK)]
+    assert is_currently_afk(events)
+
+
+def test_is_currently_afk_on_an_empty_feed() -> None:
+    assert not is_currently_afk([])
 
 
 def test_get_ongoing_afk_start_returns_none_when_empty():
@@ -751,6 +792,17 @@ def test_get_ongoing_afk_start_returns_end_of_last_not_afk():
     result = get_ongoing_afk_start([_tuple_to_event(t) for t in events])
     expected = FIRST_DATE + datetime.timedelta(seconds=150)  # end of not-afk at t=100, duration=50
     assert result == expected
+
+
+def test_dead_feed_produces_a_promptable_ongoing_period():
+    """End to end for the reported bug: with a feed that stopped 20 hours ago,
+    the watcher must offer the ongoing period to prompt about, not conclude that
+    the user has been sitting at the keyboard since yesterday morning."""
+    client = _make_prompt_client([_recent(20 * 3600 + 3600, 3600, NOT_AFK), _recent(20 * 3600, 60, NOT_AFK)])
+    ongoing = client.get_ongoing_afk_event(durration_thresh=5 * 60)
+    assert ongoing is not None
+    assert ongoing.duration.total_seconds() >= 20 * 3600
+    assert ongoing.data["ongoing"] is True
 
 
 def test_get_ongoing_afk_start_returns_none_when_no_not_afk_events():
