@@ -48,7 +48,14 @@ If not using aw-qt, you can run it manually:
 aw-watcher-afk-prompt
 ```
 
-Make sure `aw-server` and `aw-watcher-afk` are running first, as this watcher monitors AFK events.
+Make sure `aw-server` is running first, along with whatever writes the
+`aw-watcher-afk` bucket — `aw-watcher-afk` itself, or `aw-watcher-window-wayland`,
+which reports AFK status too. That feed is the *only* source of AFK periods: this
+watcher finds them in the gaps between its not-afk events, so without it there is
+nothing to prompt about. If that feed is dead at a moment when it must have
+something to say — this watcher starting, the machine resuming, you answering a
+prompt, aw-watcher-lid seeing you arrive — you get a dialog saying so rather than
+silence. See `feed_stale`.
 
 ### Alternative: systemd (Linux)
 
@@ -94,6 +101,27 @@ Available options:
   re-asked later, so it can't be buried under other windows and forgotten
   (default: from config or 5; `0` disables). Typing restarts the countdown, and
   the live "still AFK" dialog only starts it once you are back at the keyboard.
+- `--feed-stale`: How many minutes the AFK feed gets to report something after a
+  moment when it had to — this watcher starting, the machine resuming, you
+  answering a prompt, aw-watcher-lid seeing you arrive, or another watcher
+  reporting activity (see `--presence-bucket`) — before it is declared dead in the
+  log and in a dialog (default: from config or 10; `0` disables). No feed means no
+  prompts at all, however long you are away. This is deliberately not a general
+  staleness timeout: the feed is *supposed* to be silent while you are away, so
+  its silence only means anything measured against one of those moments.
+- `--presence-timeout`: Seconds a not-afk event keeps meaning you are present
+  after it stopped growing (default: from config or 300). A live AFK watcher
+  keeps extending its newest event, so once one stops growing you have either
+  left or the watcher has died. Raise it if your feed goes quiet for long
+  stretches while you are actually at the keyboard — too short, and the live
+  "still AFK" dialog appears in front of someone who is demonstrably there.
+- `--presence-bucket`: Bucket name (substring) whose events prove a human is
+  around, used only to tell a dead AFK feed from an ordinary absence. Repeatable;
+  overrides the config `presence_buckets` list, which is **empty by default**.
+  Only name watchers that stay silent while you are away. Check before you trust
+  one: on the setup this was written for, `aw-watcher-web-chrome` turned out to
+  emit an event every 90 seconds all night on a sleeping machine, which is quite
+  enough to convict a perfectly healthy feed.
 - `--display-wait`: Minutes to wait for the display server at startup before
   giving up (default: from config or 15). Started with the graphical session, this
   watcher can easily be up before the compositor is.

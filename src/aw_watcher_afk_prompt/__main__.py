@@ -1,5 +1,6 @@
 # ruff: noqa: EM101, EM102
 import argparse
+import datetime
 import time
 from collections.abc import Callable, Iterable
 from tkinter import messagebox
@@ -18,6 +19,7 @@ from aw_watcher_afk_prompt.core import (
     WATCHER_NAME,
     AWAfkPromptClient,
     AWAfkPromptError,
+    get_utc_now,
     logger,
 )
 from aw_watcher_afk_prompt.utils import format_age, format_duration, format_time_local
@@ -31,6 +33,165 @@ SNOOZE_SECONDS = 300
 # and still count as the same period (the server sometimes returns duplicated,
 # millisecond-offset events). A real return-and-leave-again moves it by minutes.
 _SAME_PERIOD_TOLERANCE_SECONDS = 5.0
+
+
+# A suspend of at least this long counts as one worth re-checking the feed after.
+# time.monotonic() stops while the machine is suspended and the wall clock does
+# not, so the two drifting apart between polls *is* the resume signal.
+RESUME_DETECTION_SECONDS = 60.0
+
+
+class _Clocks(NamedTuple):
+    """The pair of clocks whose disagreement reveals a suspend."""
+
+    mono: float
+    wall: datetime.datetime
+
+    @classmethod
+    def now(cls) -> "_Clocks":
+        return cls(time.monotonic(), get_utc_now())
+
+
+def _resumed(before: _Clocks, after: _Clocks, threshold: float = RESUME_DETECTION_SECONDS) -> bool:
+    """Did the machine suspend between these two polls?"""
+    return (after.wall - before.wall).total_seconds() - (after.mono - before.mono) > threshold
+
+
+class _FeedState(NamedTuple):
+    """What we know between polls about whether the AFK feed is still alive.
+
+    ``anchor`` is a moment when the feed *had* to speak — this watcher starting,
+    or the machine resuming — held until the feed proves it did. ``notified`` is
+    sticky until the feed reports again, so one death raises one dialog.
+    """
+
+    anchor: datetime.datetime | None
+    why: str = ""
+    notified: bool = False
+
+    @classmethod
+    def disarmed(cls) -> "_FeedState":
+        return cls(None)
+
+    @classmethod
+    def armed(cls, stale_after_minutes: float, why: str, at: datetime.datetime | None = None) -> "_FeedState":
+        if not stale_after_minutes or stale_after_minutes <= 0:
+            return cls.disarmed()
+        return cls(get_utc_now() if at is None else at, why)
+
+
+def _check_afk_feed(
+    state: AWAfkPromptClient,
+    stale_after_minutes: float,
+    feed: _FeedState,
+    now: datetime.datetime | None = None,
+) -> _FeedState:
+    """Notice that the AFK feed has died, and say so once, in a dialog.
+
+    Every prompt this watcher makes comes from a gap *between* not-afk events, so
+    a dead afk watcher leaves this one silently useless: it keeps polling, finds
+    nothing to ask about however long the user is away, and logs nothing at all.
+    Observed in the wild as a night in bed with no prompt in the morning, the feed
+    having died at a reboot 20 hours earlier.
+
+    Silence on its own cannot be the trigger. The feed says nothing whatsoever
+    while the user is away — that is what an absence *is* — so "no events for N
+    minutes" describes every lunch break as accurately as every dead watcher, and
+    since the dialog blocks this loop until dismissed, a false one costs real
+    prompts. What is evidence is silence across an *anchor*: a moment when
+    something other than the feed says the machine is up and a human is involved,
+    so that a live feed would have reported within a heartbeat. Four of them:
+
+    - this watcher starting up, or the machine resuming from suspend (_resumed),
+    - the lid watcher seeing someone arrive — a separate process, so its word is
+      independent of the feed,
+    - the user answering a prompt, which is somebody demonstrably at the keyboard,
+    - another watcher (browser, editor, terminal — see ``presence_buckets``)
+      reporting activity the feed did not notice.
+
+    All but the first also catch a feed that died mid-session.
+
+    An anchor convicts the feed when the feed said nothing across it, and when
+    enough time has passed that a live feed would have spoken. What counts as
+    "enough" differs by kind. The first three are *arrivals* — single moments —
+    so they wait ``stale_after_minutes`` from the moment itself. A presence bucket
+    is a running commentary instead, whose newest event is always near now, so
+    waiting from it would mean waiting forever; there the feed's debt is measured
+    against the commentary: activity continuing ``stale_after_minutes`` past the
+    feed's last word is what convicts.
+
+    Events from up to ``stale_after_minutes`` *before* an anchor still count as
+    proof of life: a feed that reported ten minutes ago has not died, it just has
+    nothing to say — without that margin, restarting the watcher and immediately
+    walking away would raise an alarm.
+    """
+    if not stale_after_minutes or stale_after_minutes <= 0:
+        return _FeedState.disarmed()
+    now = get_utc_now() if now is None else now
+    grace = datetime.timedelta(minutes=stale_after_minutes)
+
+    last_seen = state.get_feed_last_seen()
+    if last_seen is not None and now - last_seen < grace:
+        # The feed is talking. Nothing to corroborate, nothing to warn about, and
+        # no other bucket worth querying — this runs on every poll.
+        logger.debug(f"AFK feed is alive (last event {format_time_local(last_seen)}).")
+        return _FeedState.disarmed()
+    if feed.notified:
+        # Already said, and only the feed itself can withdraw it. Checked before
+        # the corroborating queries below rather than after: a genuinely dead feed
+        # would otherwise have us interrogating every other bucket every poll, for
+        # as long as it stays dead.
+        return feed
+
+    # (moment, why, has the feed had long enough to answer for itself)
+    arrivals = [(feed.anchor, feed.why)] if feed.anchor is not None else []
+    lid_at = state.get_lid_presence_last_seen()
+    if lid_at is not None:
+        arrivals.append((lid_at, "the lid watcher saw you arrive"))
+    if state.last_answer_at is not None:
+        arrivals.append((state.last_answer_at, "you answered a prompt"))
+    anchors = [(at, why, now - at >= grace) for at, why in arrivals]
+
+    presence_at = state.get_presence_last_seen()
+    if presence_at is not None:
+        # The feed's debt is measured against the commentary — except with nothing
+        # in the feed at all to measure against, where the commentary is treated
+        # as an arrival so that it too waits out the grace period. Convicting a
+        # feed on its first poll, alone among the anchors, was an oversight.
+        overdue = (presence_at - last_seen if last_seen is not None else now - presence_at) >= grace
+        anchors.append((presence_at, "another watcher saw you working", overdue))
+    if not anchors:
+        return feed
+
+    newest = max(at for at, _, _ in anchors)
+    if last_seen is not None and last_seen >= newest - grace:
+        # Quiet since, but it did speak after the anchor, so its silence is an
+        # absence rather than a death.
+        logger.debug(f"AFK feed answered for itself (last event {format_time_local(last_seen)}).")
+        return _FeedState.disarmed()
+
+    # An anchor only convicts on its own evidence: an older one the feed did
+    # answer for proves nothing about a newer silence, or the other way round.
+    convicting = [(at, why) for at, why, ready in anchors if ready and (last_seen is None or last_seen < at - grace)]
+    if not convicting:
+        return feed  # the feed still has time to answer for itself
+    anchor, why = max(convicting, key=lambda a: a[0])
+
+    if last_seen is None:
+        silence = "has never reported anything"
+    else:
+        # Age, not just a wall-clock time: "last reported 14:04" reads as a time
+        # today, which for a feed that died yesterday is actively misleading.
+        silence = f"last reported {format_duration(now - last_seen)} ago, at {format_time_local(last_seen)}"
+    logger.error(f"AFK feed looks dead: {state.afk_bucket_id} {silence}, and {why}.")
+    messagebox.showwarning(
+        "AW Watcher AFK Prompt: No AFK data",
+        f"The AFK feed has stopped: {state.afk_bucket_id} {silence}, and {why}.\n\n"
+        "AFK periods are found in that feed, so nothing will be asked about "
+        "while it is stopped — however long you are away.\n\n"
+        "Check that the watcher writing that bucket is still running.",
+    )
+    return feed._replace(notified=True)
 
 
 def _timeout_ms(minutes: float | None) -> int | None:
@@ -485,7 +646,11 @@ def parse_date(date_str: str):
 
 
 def get_state_retries(
-    client: ActivityWatchClient, enable_lid_events: bool = True, history_limit: int = 100
+    client: ActivityWatchClient,
+    enable_lid_events: bool = True,
+    history_limit: int = 100,
+    presence_buckets: Iterable[str] = (),
+    presence_timeout: float = 300,
 ) -> AWAfkPromptClient:
     """When the computer is starting up sometimes the aw-server is not ready for requests yet.
 
@@ -495,7 +660,13 @@ def get_state_retries(
         try:
             # This works because the constructor of AWAfkPromptState tries to get bucket names.
             # If it didn't we'd need to do something else here.
-            return AWAfkPromptClient(client, enable_lid_events=enable_lid_events, history_limit=history_limit)
+            return AWAfkPromptClient(
+                client,
+                enable_lid_events=enable_lid_events,
+                history_limit=history_limit,
+                presence_buckets=presence_buckets,
+                presence_timeout=presence_timeout,
+            )
         except ConnectionError:
             logger.exception("Cannot connect to client.")
             time.sleep(10)  # 10 * 10 = wait for 100s before giving up.
@@ -579,6 +750,31 @@ def main() -> None:
         "dialog buried under other windows isn't forgotten (default: from config or 5; 0 disables).",
     )
     parser.add_argument(
+        "--feed-stale",
+        type=float,
+        default=config.get("feed_stale", 10),
+        help="How long the AFK feed may stay silent across a moment when it had to report — a "
+        "startup, a resume, someone answering a prompt — before it is declared dead in the log "
+        "and in a dialog. No feed means no prompts at all (default: from config or 10; 0 disables).",
+    )
+    parser.add_argument(
+        "--presence-timeout",
+        type=float,
+        default=config.get("presence_timeout", 300),
+        help="Seconds a not-afk event keeps meaning you are present after it stopped growing "
+        "(default: from config or 300). Set it above the quiet time your AFK feed shows while "
+        "you are actually there, or a present user gets called absent.",
+    )
+    parser.add_argument(
+        "--presence-bucket",
+        action="append",
+        dest="presence_buckets",
+        default=None,
+        help="Bucket name (substring) whose events prove a human is around, used to tell a dead "
+        "AFK feed from an absence. Repeatable; overrides the config list when given. Only name "
+        "watchers that stay silent while you are away — one that heartbeats will cry wolf.",
+    )
+    parser.add_argument(
         "--display-wait",
         type=float,
         default=config.get("display_wait", aw_dialog.DISPLAY_WAIT_MINUTES),
@@ -609,6 +805,8 @@ def main() -> None:
         help="Run backfill for unfilled AFK periods, then exit (do not start polling loop).",
     )
     args = parser.parse_args()
+    if args.presence_buckets is None:
+        args.presence_buckets = config.get("presence_buckets", [])
 
     # Set up logging
     setup_logging(
@@ -738,7 +936,11 @@ def main() -> None:
         )
         with client:
             state = get_state_retries(
-                client, enable_lid_events=config.get("enable_lid_events", True), history_limit=args.history_limit
+                client,
+                enable_lid_events=config.get("enable_lid_events", True),
+                history_limit=args.history_limit,
+                presence_buckets=args.presence_buckets,
+                presence_timeout=args.presence_timeout,
             )
             logger.info("Successfully connected to the server.")
 
@@ -780,11 +982,29 @@ def main() -> None:
             deep_scan_interval = args.backfill_interval * 60  # config is in minutes
             server_down_since = None
             server_down_notified = False
+            # The AFK feed check is armed now (this watcher just started) and
+            # re-armed after every suspend; see _check_afk_feed.
+            feed = _FeedState.armed(args.feed_stale, "this watcher started")
+            clocks = _Clocks.now()
             # Track which ongoing AFK period we've already shown a pre-emptive dialog for,
             # identified by its start timestamp. Reset when a new AFK period starts.
             prompted_ongoing_start = None
             while True:
                 try:
+                    # A resume means the machine is up and time has passed, so a
+                    # live feed is about to report -- the one moment its silence
+                    # is worth anything. Re-arm the check for it.
+                    clocks, before = _Clocks.now(), clocks
+                    if _resumed(before, clocks):
+                        logger.info(
+                            f"Resumed after {format_duration((clocks.wall - before.wall).total_seconds())} suspended."
+                        )
+                        feed = _FeedState.armed(args.feed_stale, "the machine resumed", clocks.wall)
+
+                    # Before doing the work: is there even a feed to find AFK
+                    # periods in? Everything below is a no-op without one.
+                    feed = _check_afk_feed(state, args.feed_stale, feed)
+
                     # Shallow real-time scan (small depth window) for responsiveness:
                     # catches a just-finished AFK period within one poll interval.
                     shallow = list(

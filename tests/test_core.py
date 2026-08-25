@@ -777,6 +777,24 @@ def test_is_currently_afk_on_an_empty_feed() -> None:
     assert not is_currently_afk([])
 
 
+def test_presence_timeout_is_configurable():
+    """A feed with a slower pulse than this one's needs a longer fuse: at the
+    default 300s the margin over an observed 120s steady-state lag is only 2.5x,
+    and calling a present user absent puts a "still AFK" dialog in their face."""
+    events = [_recent(400 + 60, 60, NOT_AFK), _recent(400, 60, NOT_AFK)]
+    assert is_currently_afk(events)  # 400s > the 300s default
+    assert not is_currently_afk(events, stale_after=600)
+    assert get_ongoing_afk_start(events, stale_after=600) is None
+
+
+def test_the_client_threads_the_configured_timeout_through():
+    """The knob is no use if the code path the watcher actually runs ignores it."""
+    client = _make_prompt_client([_recent(400 + 60, 60, NOT_AFK), _recent(400, 60, NOT_AFK)])
+    assert client.get_ongoing_afk_event(durration_thresh=60) is not None
+    client.presence_timeout = 600
+    assert client.get_ongoing_afk_event(durration_thresh=60) is None
+
+
 def test_get_ongoing_afk_start_returns_none_when_empty():
     """Returns None for empty event list."""
     assert get_ongoing_afk_start([]) is None

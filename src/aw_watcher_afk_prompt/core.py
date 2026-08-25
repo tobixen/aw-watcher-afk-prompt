@@ -33,9 +33,12 @@ DATA_KEY = "message"
 _POST_MAX_RETRIES = 13  # 1 initial attempt + 12 retries × 10 s ≈ 2 minutes
 _POST_RETRY_INTERVAL = 10  # seconds between retries on transient errors
 
-# How long a not-afk event keeps meaning "the user is here" after it stopped
-# growing. Comfortably above what a live feed does: aw-watcher-window-wayland
-# reports in ~85 s chunks with gaps of up to ~2 minutes while someone sits there.
+# Default for how long a not-afk event keeps meaning "the user is here" after it
+# stopped growing; configurable as presence_timeout. Comfortably above what a live
+# feed does: aw-watcher-window-wayland reports in ~85 s chunks with gaps of up to
+# ~2 minutes while someone sits there. A feed with a slower pulse needs a longer
+# fuse — set it too short and a present user is declared absent, which puts a
+# "still AFK" dialog in the face of somebody demonstrably at the keyboard.
 PRESENCE_TIMEOUT_SECONDS = 300
 
 
@@ -335,11 +338,25 @@ class SeenEventsStore:
 
 
 class AWAfkPromptClient:
-    def __init__(self, client: ActivityWatchClient, enable_lid_events: bool = True, history_limit: int = 100):
+    # When the user last answered a prompt; see post_event. A class attribute so
+    # it is readable on any instance, however constructed.
+    last_answer_at: datetime.datetime | None = None
+    presence_timeout: float = PRESENCE_TIMEOUT_SECONDS
+
+    def __init__(
+        self,
+        client: ActivityWatchClient,
+        enable_lid_events: bool = True,
+        history_limit: int = 100,
+        presence_buckets: Iterable[str] = (),
+        presence_timeout: float = PRESENCE_TIMEOUT_SECONDS,
+    ):
         self.client = client
         self.bucket_id = f"{WATCHER_NAME}_{self.client.client_hostname}"
         self.enable_lid_events = enable_lid_events
         self.history_limit = history_limit
+        self.presence_buckets = list(presence_buckets)
+        self.presence_timeout = presence_timeout
 
         if self.bucket_id not in self._all_buckets:
             # Create bucket synchronously - we need it to exist before fetching events.
@@ -385,6 +402,7 @@ class AWAfkPromptClient:
         """
         event.data[DATA_KEY] = message
         event["id"] = None  # Wipe the ID so we don't edit the AFK event
+        self._note_answered()
 
         for attempt in range(_POST_MAX_RETRIES):
             try:
@@ -404,6 +422,20 @@ class AWAfkPromptClient:
                     # Don't mark as seen - event will be prompted again
                     raise
 
+    def _note_answered(self) -> None:
+        """Record that the user just answered a prompt.
+
+        Someone typed it, so someone is here — the least deniable presence signal
+        available, and the one that catches a feed dying while the user works on
+        (see _check_afk_feed). Both answer paths must call this: a split answer
+        never reaches post_event, so stamping it there alone left split-mode
+        answers as no evidence at all.
+
+        Stamped on the answer arriving rather than on the post succeeding, since
+        it is the typing that is the evidence, not the HTTP round trip.
+        """
+        self.last_answer_at = get_utc_now()
+
     def post_split_events(self, original_event: aw_core.Event, activities: list):
         """Post multiple events from split mode with error handling.
 
@@ -411,6 +443,7 @@ class AWAfkPromptClient:
             original_event: The original AFK event that was split
             activities: List of ActivityLine objects from split mode
         """
+        self._note_answered()
         if ActivityLine is None:
             logger.error("ActivityLine not available, cannot post split events")
             return
@@ -553,6 +586,104 @@ class AWAfkPromptClient:
         logger.warning(f"Reached max limit ({max_limit}) without finding gap boundaries")
         return all_events, limit
 
+    def get_feed_last_seen(self) -> datetime.datetime | None:
+        """When the AFK feed last reported anything: the end of its newest event.
+
+        This is the liveness signal for the watcher writing the afk bucket, which
+        is the only source of AFK periods here -- gaps are found *between* its
+        not-afk events, so when it dies this watcher detects nothing at all.
+
+        Note what this can and cannot tell you. A silent feed does not mean a dead
+        feed: aw-watcher-window-wayland (and aw-watcher-afk, for the periods where
+        it emits no afk heartbeat) says nothing whatsoever while the user is away,
+        so silence is exactly what a real absence looks like. Only silence across
+        a moment when the feed *should* have spoken is evidence of death, and what
+        those moments are is _check_afk_feed's business, not this method's.
+
+        Only the afk bucket counts. Lid events are sporadic by nature (they arrive
+        on a lid or suspend transition), so a healthy lid watcher looks silent
+        nearly all the time.
+
+        Returns None when the bucket holds no events whatsoever.
+        """
+        events = self.client.get_events(self.afk_bucket_id, limit=1)
+        if not events:
+            return None
+        return max(e.timestamp + e.duration for e in events)
+
+    def get_lid_presence_last_seen(self) -> datetime.datetime | None:
+        """When the lid watcher last saw a human turn up: lid opened, or resumed.
+
+        This is the one presence signal that does not come from the afk feed, so
+        it is the one thing that can tell a dead feed from a quiet one: the lid
+        watcher is a separate process, and opening a lid is something only a
+        person does. If it reports someone arriving and the feed then says
+        nothing, the feed is not quiet -- it is dead.
+
+        Only the *timestamp* is used, never the end: aw-watcher-lid's not-afk
+        event spans the entire time the lid is open, so its end tracks "now" even
+        while the user sleeps beside an open laptop. The timestamp is the moment
+        of the transition, which is the part that means anything here.
+
+        Returns None when there is no lid watcher, or it has seen no arrival.
+        """
+        if not self.lid_bucket_id:
+            return None
+        try:
+            lid_events = self.client.get_events(self.lid_bucket_id, limit=self.history_limit)
+        except HTTPError:
+            logger.warning("Failed to get lid events for the feed health check")
+            return None
+        arrivals = [e.timestamp for e in lid_events if not is_afk(e)]
+        return max(arrivals) if arrivals else None
+
+    def get_presence_last_seen(self) -> datetime.datetime | None:
+        """When another watcher last saw something happen, per ``presence_buckets``.
+
+        Browser, editor and terminal watchers are separate processes with their
+        own view of what the user is doing. If one of them reports activity and
+        the afk feed says nothing, the feed is most likely dead rather than the
+        user absent -- so this, like the lid watcher, turns silence into evidence.
+        Which buckets count is configuration, because only the user knows which of
+        their watchers fire for a human and which fire for a background process.
+
+        Only the event's *start* is used, never its end, for the same reason as
+        get_lid_presence_last_seen: a browser tab or editor left open produces an
+        event whose end tracks "now" all night, which would read as presence with
+        nobody there. The start is when the activity actually began. A bucket that
+        starts events without a human involved will still cause false alarms --
+        hence the configuration, and the warning in its comment.
+
+        The feed's own buckets are excluded: matching them would be circular.
+        """
+        if not self.presence_buckets:
+            return None
+        # Asked for afresh, not taken from the cached bucket list: that is resolved
+        # once at construction, and a browser started after this watcher registers
+        # its bucket later. Reading the cache would mean never seeing it again for
+        # the lifetime of the process. Only reached when the feed has gone quiet
+        # and has not already been reported.
+        try:
+            buckets = self.client.get_buckets()
+        except (HTTPError, RequestsConnectionError):
+            logger.debug("Could not list buckets for the feed health check")
+            return None
+        excluded = {self.afk_bucket_id, self.window_bucket_id, self.lid_bucket_id, self.bucket_id}
+        candidates = [
+            bucket
+            for bucket in buckets
+            if bucket not in excluded and any(pattern in bucket for pattern in self.presence_buckets)
+        ]
+        seen: list[datetime.datetime] = []
+        for bucket in candidates:
+            try:
+                events = self.client.get_events(bucket, limit=1)
+            except HTTPError:
+                logger.debug(f"Could not read presence bucket {bucket}")
+                continue
+            seen.extend(e.timestamp for e in events)
+        return max(seen) if seen else None
+
     def get_ongoing_afk_event(self, durration_thresh: float) -> aw_core.Event | None:
         """Return a synthetic event for the currently-ongoing AFK period if long enough to prompt.
 
@@ -560,7 +691,7 @@ class AWAfkPromptClient:
         Returns None if not currently AFK or the AFK duration is below the threshold.
         """
         all_events, _ = self._fetch_events_with_dynamic_limit()
-        afk_start = get_ongoing_afk_start(all_events)
+        afk_start = get_ongoing_afk_start(all_events, self.presence_timeout)
         if afk_start is None:
             return None
         duration = get_utc_now() - afk_start
@@ -637,7 +768,7 @@ class AWAfkPromptClient:
         # Most recent event is LAST after sorting (ascending order)
         if all_events:
             most_recent = all_events[-1]  # Last element is most recent
-            currently_afk = is_currently_afk(all_events)
+            currently_afk = is_currently_afk(all_events, self.presence_timeout)
             logger.debug(
                 f"Most recent event: {most_recent.timestamp.astimezone(LOCAL_TIMEZONE).strftime('%H:%M:%S')} | "
                 f"status={most_recent.data.get('status')} | currently_afk={currently_afk}"
