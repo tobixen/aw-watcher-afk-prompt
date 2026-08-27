@@ -38,6 +38,33 @@ This document tracks planned improvements, known issues, and future work for the
   - Implement inline editing
 
 ### Code Quality
+- [ ] Two Tk roots in one process (split_dialog.py:1271-1277)
+  - `dialog.ask_string` calls `ask_split_activities` without a parent
+    (dialog.py:906), so every Split press builds a second `tk.Tk()` — a second
+    Tk interpreter, and a second X connection, in the same process. It is not
+    explicitly destroyed either, though it does go when the cycle is collected.
+  - Fix at the call site: pass `parent=get_root()`, which `dialog` already has
+    in scope (dialog.py:46). No import cycle is involved — `split_dialog` does
+    not import `dialog` at all, and the "avoid circular dependency" comment at
+    dialog.py:901 is stale.
+  - Harmless so far because `tkinter` only sets `_default_root` when it is
+    unset, and every `StringVar`/`IntVar` in split_dialog.py passes `master=`
+    explicitly, so nothing binds to the wrong interpreter.
+  - Same observation as the code comment at dialog.py:41-42; fix both together.
+- [ ] Start time is validated and committed on every keystroke
+      (split_dialog.py:743, :910 → `_on_start_change`)
+  - The `trace_add("write", …)` callback runs per keystroke, so each partially
+    typed value is parsed. The ones that fail log at WARNING (:1122, :1129,
+    :1161, :1164) — typing `22:00` into an empty field gives three, and a
+    backspaced-then-retyped `01:03` gives eight, which is where the observed
+    `Invalid start time format: 0103`, `003`, `03` came from.
+  - Worse than the log noise: a partial value that *parses* is committed.
+    Typing `22:0` on the way to `22:05` reaches `adjust_start_time` (:1144),
+    redistributes every duration, and rewrites the entry text through
+    `update_from_activity` (:1158, :883) while the user is still typing. So the
+    fix is to validate on commit (Return/focus-out), not to lower the log level.
+  - The duration field has the same shape: `_on_duration_change` per keystroke,
+    warning at :809 whenever the `IntVar` holds a partial or empty value.
 - [x] Wrap Entry widget for reuse across dialogs (dialog.py:215)
   - Created EnhancedEntry widget in widgets.py with keyboard shortcuts
   - Used in AWAskAwayDialog, BatchEditDialog, and split_dialog.py
@@ -67,6 +94,19 @@ This document tracks planned improvements, known issues, and future work for the
   - Delete key to remove activity
 
 ### Testing & Quality
+- [ ] `make test` draws real Tk windows on the developer's display
+  - The `nonmodal` fixture in test_dialog_ui.py:35 stubs `deiconify` to prevent
+    exactly this, and the stub does nothing: `tkinter.Wm.deiconify` *is*
+    `tkinter.Wm.wm_deiconify` (an in-class alias), and `simpledialog` calls
+    `w.wm_deiconify()` from `_place_window`, which no attribute set on the
+    subclass shadows. Patch `wm_deiconify` instead.
+  - So it is `AWAfkPromptDialog`, i.e. test_dialog_ui.py itself, that flashes —
+    every dialog it constructs. test_split_dialog_ui.py and test_widgets.py do
+    create a root per test but withdraw it, and bypass `Dialog.__init__`
+    entirely, so they map nothing.
+  - CI already avoids the whole question with `xvfb-run`
+    (.github/workflows/ci.yml:34) while `make test` (Makefile:68) does not.
+    `make test` should use `xvfb-run` when available and say so when it is not.
 - [ ] Add integration tests with real ActivityWatch server
   - Currently only unit tests and mocked integration tests
 - [ ] Add UI automation tests
