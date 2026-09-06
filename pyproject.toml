@@ -29,7 +29,7 @@ classifiers = [
 dependencies = ["aw-client", "aw-core", "appdirs"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "ruff>=0.4", "pre-commit>=3.0"]
+dev = ["pytest>=8.0", "ruff>=0.4", "pre-commit>=3.0", "python-xlib"]
 
 [project.scripts]
 aw-watcher-afk-prompt = "aw_watcher_afk_prompt.__main__:main"
@@ -48,7 +48,7 @@ source = "vcs"
 version-file = "src/aw_watcher_afk_prompt/_version.py"
 
 [tool.hatch.envs.default]
-dependencies = ["coverage[toml]>=6.5", "pytest"]
+dependencies = ["coverage[toml]>=6.5", "pytest", "python-xlib"]
 [tool.hatch.envs.default.scripts]
 test = "pytest {args:tests}"
 test-cov = "coverage run -m pytest {args:tests}"

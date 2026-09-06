@@ -38,19 +38,17 @@ This document tracks planned improvements, known issues, and future work for the
   - Implement inline editing
 
 ### Code Quality
-- [ ] Two Tk roots in one process (split_dialog.py:1271-1277)
-  - `dialog.ask_string` calls `ask_split_activities` without a parent
-    (dialog.py:906), so every Split press builds a second `tk.Tk()` — a second
-    Tk interpreter, and a second X connection, in the same process. It is not
-    explicitly destroyed either, though it does go when the cycle is collected.
-  - Fix at the call site: pass `parent=get_root()`, which `dialog` already has
-    in scope (dialog.py:46). No import cycle is involved — `split_dialog` does
-    not import `dialog` at all, and the "avoid circular dependency" comment at
-    dialog.py:901 is stale.
-  - Harmless so far because `tkinter` only sets `_default_root` when it is
-    unset, and every `StringVar`/`IntVar` in split_dialog.py passes `master=`
-    explicitly, so nothing binds to the wrong interpreter.
-  - Same observation as the code comment at dialog.py:41-42; fix both together.
+- [ ] An unanswered split dialog blocks the watcher indefinitely
+      (split_dialog.py, no `after(` anywhere in it)
+  - The ordinary prompt auto-snoozes after `timeout_ms` and comes back later
+    (dialog.py:481-494), but pressing Split cancels those timers
+    (dialog.py:698) and the split dialog arms none of its own. A split left
+    open therefore holds the poll loop for as long as it sits there — observed
+    2026-09-05: 15:56 to 17:29, no prompts, no snooze.
+  - Fix: thread `timeout_ms` through `ask_string` → `ask_split_activities` →
+    `SplitActivityDialog` and arm the same countdown. Needs a decision first on
+    what an auto-snooze does with half-typed activity lines: dropping the
+    user's typing silently is worse than the block it prevents.
 - [ ] Start time is validated and committed on every keystroke
       (split_dialog.py:743, :910 → `_on_start_change`)
   - The `trace_add("write", …)` callback runs per keystroke, so each partially

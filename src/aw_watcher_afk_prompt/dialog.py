@@ -11,7 +11,7 @@ from tkinter import messagebox, simpledialog, ttk
 
 import appdirs
 
-from aw_watcher_afk_prompt.widgets import EnhancedEntry
+from aw_watcher_afk_prompt.widgets import EnhancedEntry, flush_closed_windows
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +38,8 @@ DISPLAY_WAIT_MINUTES = 15.0
 # seconds — or a compositor crash — away, and dying inside `import` gives no chance
 # to log why (see wait_for_display).
 #
-# Not the only root in the process, as much as it should be: ask_split_activities()
-# is called without a parent (see ask_string) and makes one of its own.
+# The only root in the process: ask_split_activities() is handed this one rather
+# than making a second Tk interpreter of its own (see ask_string).
 _root: tk.Tk | None = None
 
 
@@ -696,6 +696,10 @@ class AWAfkPromptDialog(simpledialog.Dialog):
 
             self.afk_duration_seconds = (datetime.now(UTC) - self.afk_start).total_seconds()
         self._cancel_all_timers()
+        # withdraw before destroy, as cancel() does and for the same reason:
+        # destroy() alone leaves the window on screen until something else runs
+        # the event loop (see the flush in ask_split_activities).
+        self.withdraw()
         self.destroy()
 
     # @override (when we get to 3.12)
@@ -871,54 +875,63 @@ def ask_string(
         If split mode is activated, returns a special marker to indicate
         the calling code should use ask_split_activities instead.
     """
-    # Loop to handle switching between single and split modes
-    initial_text = initial_value
-    while True:
-        d = AWAfkPromptDialog(
-            title,
-            prompt,
-            history,
-            afk_start,
-            afk_duration_seconds,
-            queue_info=queue_info,
-            is_ongoing=is_ongoing,
-            still_afk_check=still_afk_check,
-            refresh=refresh,
-            timeout_ms=timeout_ms,
-        )
+    try:
+        # Loop to handle switching between single and split modes
+        initial_text = initial_value
+        while True:
+            d = AWAfkPromptDialog(
+                title,
+                prompt,
+                history,
+                afk_start,
+                afk_duration_seconds,
+                queue_info=queue_info,
+                is_ongoing=is_ongoing,
+                still_afk_check=still_afk_check,
+                refresh=refresh,
+                timeout_ms=timeout_ms,
+            )
 
-        # Pre-fill with initial value or text from split mode
-        if initial_text:
-            d.entry.delete(0, tk.END)
-            d.entry.insert(0, initial_text)
-            initial_text = None
+            # Pre-fill with initial value or text from split mode
+            if initial_text:
+                d.entry.delete(0, tk.END)
+                d.entry.insert(0, initial_text)
+                initial_text = None
 
-        # Wait for dialog to close
-        # (AWAfkPromptDialog.__init__ calls wait_window internally via Dialog.__init__)
+            # Wait for dialog to close
+            # (AWAfkPromptDialog.__init__ calls wait_window internally via Dialog.__init__)
 
-        # Check if user clicked Split button
-        if d.split_mode:
-            # Import here to avoid circular dependency
-            from aw_watcher_afk_prompt.split_dialog import ask_split_activities
+            # Check if user clicked Split button
+            if d.split_mode:
+                # Imported here rather than at module level: this module is imported
+                # for its dialogs long before anyone presses Split.
+                from aw_watcher_afk_prompt.split_dialog import ask_split_activities
 
-            # Show split dialog. Use the dialog's duration, which switch_to_split_mode
-            # snapshots to start..now for ongoing periods (passed-in value is None there).
-            result = ask_split_activities(title, prompt, afk_start, d.afk_duration_seconds, history)
+                # Show split dialog. Use the dialog's duration, which switch_to_split_mode
+                # snapshots to start..now for ongoing periods (passed-in value is None there).
+                result = ask_split_activities(
+                    title, prompt, afk_start, d.afk_duration_seconds, history, parent=get_root()
+                )
 
-            # Check what the split dialog returned
-            if result is None:
-                return None  # Cancelled in split mode
-            elif isinstance(result, str):
-                # User removed activities down to 1 - return to single mode
-                logger.info(f"Returning to single mode with description: '{result}'")
-                initial_text = result
-                continue  # Loop back to show main dialog again
-            else:
-                # List of activities - return as split mode
-                return ("SPLIT_MODE", result)
+                # Check what the split dialog returned
+                if result is None:
+                    return None  # Cancelled in split mode
+                elif isinstance(result, str):
+                    # User removed activities down to 1 - return to single mode
+                    logger.info(f"Returning to single mode with description: '{result}'")
+                    initial_text = result
+                    continue  # Loop back to show main dialog again
+                else:
+                    # List of activities - return as split mode
+                    return ("SPLIT_MODE", result)
 
-        # Normal mode - return the result
-        return d.result
+            # Normal mode - return the result
+            return d.result
+    finally:
+        # A closed dialog only *queues* its window's removal; nothing runs
+        # the event loop again until the next prompt, so send it now (see
+        # widgets.flush_closed_windows).
+        flush_closed_windows(get_root())
 
 
 if __name__ == "__main__":

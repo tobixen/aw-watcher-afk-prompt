@@ -4,9 +4,26 @@ This module contains shared widget classes that provide consistent
 behavior across all dialogs in the application.
 """
 
+import contextlib
 import re
 import tkinter as tk
 from tkinter import ttk
+
+
+def flush_closed_windows(widget: tk.Misc) -> None:
+    """Send a just-closed dialog's window changes to the display server.
+
+    ``destroy()`` only queues the removal; Tk sends it on the next pass through
+    the event loop, and a watcher that closes a dialog and goes back to polling
+    never makes one. The window then stays on the screen, mapped and
+    unresponsive, with nobody left to read its events. Any live widget will do
+    as the argument — the flush is per interpreter, not per window.
+
+    Swallows the TclError from a display server that has gone away meanwhile,
+    since this runs where an exception would replace a more interesting one.
+    """
+    with contextlib.suppress(tk.TclError):
+        widget.update_idletasks()
 
 
 class EnhancedEntry(ttk.Entry):

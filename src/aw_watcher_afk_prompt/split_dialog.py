@@ -4,6 +4,7 @@ This module provides data structures and logic for splitting an AFK period into
 multiple sequential activities with different descriptions and time allocations.
 """
 
+import contextlib
 import logging
 import tkinter as tk
 from dataclasses import dataclass, field
@@ -11,7 +12,7 @@ from datetime import datetime, timedelta
 from tkinter import simpledialog, ttk
 
 from aw_watcher_afk_prompt.utils import LOCAL_TIMEZONE, format_time_local
-from aw_watcher_afk_prompt.widgets import EnhancedEntry
+from aw_watcher_afk_prompt.widgets import EnhancedEntry, flush_closed_windows
 
 logger = logging.getLogger(__name__)
 
@@ -1251,7 +1252,12 @@ class SplitActivityDialog(simpledialog.Dialog):
 
 
 def ask_split_activities(
-    title: str, prompt: str, afk_start: datetime, afk_duration_seconds: float, history: list[str], parent=None
+    title: str,
+    prompt: str,
+    afk_start: datetime,
+    afk_duration_seconds: float,
+    history: list[str],
+    parent: tk.Misc | None = None,
 ) -> list[ActivityLine] | None | str:
     """Show split activity dialog and return list of activities, description, or None.
 
@@ -1268,18 +1274,39 @@ def ask_split_activities(
         - String description if user removed activities down to 1 (return to single mode)
         - None if cancelled
     """
+    # A root of our own is a second Tk interpreter and a second X connection in
+    # the same process, and nothing touches it again once we return — which is
+    # why it is destroyed here, and why callers should pass the parent they
+    # already have (dialog.get_root()) instead.
+    own_root = None
     if parent is None:
-        # Create hidden root if needed
-        import tkinter as tk
+        own_root = tk.Tk()
+        own_root.withdraw()
+        parent = own_root
 
-        root = tk.Tk()
-        root.withdraw()
-        parent = root
+    try:
+        dialog = SplitActivityDialog(parent, title, prompt, afk_start, afk_duration_seconds, history)
 
-    dialog = SplitActivityDialog(parent, title, prompt, afk_start, afk_duration_seconds, history)
+        # Check if user removed activities down to 1 (return to single mode)
+        if dialog.return_to_single_mode:
+            return dialog.single_mode_description
 
-    # Check if user removed activities down to 1 (return to single mode)
-    if dialog.return_to_single_mode:
-        return dialog.single_mode_description
-
-    return dialog.result
+        return dialog.result
+    finally:
+        # Cancel is where the missing flush showed: it destroys the window
+        # without withdrawing it first (Dialog.ok does withdraw, which
+        # flushes), so the window stayed on the screen, mapped and
+        # unresponsive.
+        #
+        # A dialog whose constructor raised never destroyed itself at all, and
+        # the exception left no reference to it either — hence the sweep rather
+        # than a variable. On every other path it finds nothing to do.
+        with contextlib.suppress(tk.TclError):
+            for child in parent.winfo_children():
+                if isinstance(child, SplitActivityDialog) and child.winfo_exists():
+                    child.destroy()
+        if own_root is not None:
+            with contextlib.suppress(tk.TclError):
+                own_root.destroy()
+        else:
+            flush_closed_windows(parent)
