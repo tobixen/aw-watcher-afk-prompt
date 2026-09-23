@@ -14,9 +14,10 @@ from typing import Any
 import appdirs
 import aw_core
 import aw_transform
-from aw_client.client import ActivityWatchClient
+import requests
+from aw_client.client import ActivityWatchClient, always_raise_for_request_errors
 from requests.exceptions import ConnectionError as RequestsConnectionError
-from requests.exceptions import HTTPError
+from requests.exceptions import HTTPError, Timeout
 
 from aw_watcher_afk_prompt.utils import LOCAL_TIMEZONE
 
@@ -30,7 +31,7 @@ except ImportError:
 WATCHER_NAME = "aw-watcher-afk-prompt"
 DATA_KEY = "message"
 
-_POST_MAX_RETRIES = 13  # 1 initial attempt + 12 retries × 10 s ≈ 2 minutes
+_POST_MAX_RETRIES = 13  # 1 initial attempt + 12 retries × 10 s ≈ 2 minutes (more if connects time out)
 _POST_RETRY_INTERVAL = 10  # seconds between retries on transient errors
 
 # Default for how long a not-afk event keeps meaning "the user is here" after it
@@ -44,6 +45,9 @@ PRESENCE_TIMEOUT_SECONDS = 300
 
 def _is_transient_error(exc: Exception) -> bool:
     """Return True for errors that are worth retrying (server/network glitches)."""
+    # ConnectTimeout is a ConnectionError: nothing reached the server, so a retry is
+    # safe. A ReadTimeout is not retried -- the server may have stored the event
+    # before its answer stalled, and a retry would store it twice.
     if isinstance(exc, RequestsConnectionError):
         return True
     if isinstance(exc, HTTPError):
@@ -57,6 +61,48 @@ def _is_transient_error(exc: Exception) -> bool:
 
 class AWAfkPromptError(Exception):
     pass
+
+
+class ActivityWatchClientWithTimeout(ActivityWatchClient):
+    """ActivityWatchClient whose requests give up instead of waiting forever.
+
+    aw-client sends every request without a timeout, so one connection the server
+    never answers blocks the caller for good -- and here the caller is the main
+    loop or a dialog's Tk timer. That is the likely way this watcher once sat
+    silent for 29 hours (never confirmed). A timeout raises requests' Timeout,
+    which the callers treat as any other server trouble.
+
+    The three methods mirror aw-client's own, plus the timeout.
+    """
+
+    # (connect, read) seconds. A 24-hour backfill query is the slowest thing asked
+    # and normally takes well under a second. The read timeout is kept short since
+    # dialog refreshes call the server from Tk callbacks: a stall freezes the dialog.
+    request_timeout: tuple[float, float] = (5.0, 20.0)
+
+    @always_raise_for_request_errors
+    def _get(self, endpoint: str, params: dict | None = None) -> requests.Response:
+        return requests.get(self._url(endpoint), params=params, timeout=self.request_timeout)
+
+    @always_raise_for_request_errors
+    def _post(self, endpoint: str, data: list[Any] | dict[str, Any], params: dict | None = None) -> requests.Response:
+        headers = {"Content-type": "application/json", "charset": "utf-8"}
+        return requests.post(
+            self._url(endpoint),
+            data=bytes(json.dumps(data), "utf8"),
+            headers=headers,
+            params=params,
+            timeout=self.request_timeout,
+        )
+
+    @always_raise_for_request_errors
+    def _delete(self, endpoint: str, data: Any = None) -> requests.Response:
+        if data is None:
+            data = {}
+        headers = {"Content-type": "application/json"}
+        return requests.delete(
+            self._url(endpoint), data=json.dumps(data), headers=headers, timeout=self.request_timeout
+        )
 
 
 logger = logging.getLogger(__name__)
@@ -665,7 +711,7 @@ class AWAfkPromptClient:
         # and has not already been reported.
         try:
             buckets = self.client.get_buckets()
-        except (HTTPError, RequestsConnectionError):
+        except (HTTPError, RequestsConnectionError, Timeout):
             logger.debug("Could not list buckets for the feed health check")
             return None
         excluded = {self.afk_bucket_id, self.window_bucket_id, self.lid_bucket_id, self.bucket_id}

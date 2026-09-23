@@ -1,6 +1,8 @@
 # ruff: noqa: EM101, EM102
 import argparse
 import datetime
+import faulthandler
+import signal
 import time
 from collections.abc import Callable, Iterable
 from tkinter import messagebox
@@ -9,7 +11,7 @@ from typing import NamedTuple
 import aw_core
 from aw_client.client import ActivityWatchClient
 from aw_core.log import setup_logging
-from requests.exceptions import ConnectionError, HTTPError
+from requests.exceptions import ConnectionError, HTTPError, Timeout
 
 import aw_watcher_afk_prompt.dialog as aw_dialog
 from aw_watcher_afk_prompt._version import __version__
@@ -17,6 +19,7 @@ from aw_watcher_afk_prompt.config import load_config
 from aw_watcher_afk_prompt.core import (
     DATA_KEY,
     WATCHER_NAME,
+    ActivityWatchClientWithTimeout,
     AWAfkPromptClient,
     AWAfkPromptError,
     get_utc_now,
@@ -33,6 +36,20 @@ SNOOZE_SECONDS = 300
 # and still count as the same period (the server sometimes returns duplicated,
 # millisecond-offset events). A real return-and-leave-again moves it by minutes.
 _SAME_PERIOD_TOLERANCE_SECONDS = 5.0
+
+# What "the server is in trouble" looks like from here. A timeout belongs with the
+# rest: it is what a stalled request turns into now that requests have one.
+SERVER_ERRORS = (ConnectionError, HTTPError, Timeout)
+
+
+def enable_stack_dumps() -> None:
+    """Dump every thread's stack to stderr (the journal) on SIGUSR1.
+
+    For a watcher that stops working without logging why: ``kill -USR1 <pid>``
+    shows where it is stuck, without killing it.
+    """
+    if hasattr(signal, "SIGUSR1"):
+        faulthandler.register(signal.SIGUSR1, all_threads=True)
 
 
 # A suspend of at least this long counts as one worth re-checking the feed after.
@@ -250,7 +267,7 @@ def _make_refresh(
             return update
         try:
             remaining = sorted(rescan(), key=lambda e: e.timestamp)
-        except (ConnectionError, HTTPError) as e:
+        except SERVER_ERRORS as e:
             logger.debug(f"Live queue recount failed, keeping the current count: {e}")
             return update
         # The period being prompted is unanswered by definition, so it counts even
@@ -261,7 +278,7 @@ def _make_refresh(
         if ongoing_check is not None:
             try:
                 ongoing = bool(ongoing_check())
-            except (ConnectionError, HTTPError) as e:
+            except SERVER_ERRORS as e:
                 logger.debug(f"Live ongoing-period check failed: {e}")
         update["queue_info"] = _build_queue_info(remaining, answered, ongoing)
         return update
@@ -316,6 +333,7 @@ def prompt_ongoing(
     the user never had a chance to see would defeat its purpose.
     """
     start_time_str = format_time_local(event.timestamp)
+    logger.info(f"Showing the live dialog for the ongoing AFK period from {start_time_str}")
     prompt_text = f"What were you doing from {start_time_str}? (still AFK)"
     return aw_dialog.ask_string(
         "AFK Checkin (ongoing)",
@@ -420,7 +438,7 @@ def _process_events(
         if ongoing_check is not None:
             try:
                 ongoing = bool(ongoing_check())
-            except (ConnectionError, HTTPError) as e:
+            except SERVER_ERRORS as e:
                 logger.warning(f"Ongoing-period check failed: {e}")
         response = prompt(
             event,
@@ -459,7 +477,7 @@ def _process_events(
         if rescan is not None:
             try:
                 refreshed = sorted(rescan(), key=lambda e: e.timestamp)
-            except (ConnectionError, HTTPError) as e:
+            except SERVER_ERRORS as e:
                 logger.warning(f"Queue refresh failed, keeping current queue: {e}")
             else:
                 if len(refreshed) != len(queue):
@@ -531,7 +549,7 @@ def _handle_still_afk(state: AWAfkPromptClient, args, prompted_ongoing_start) ->
     if args.backfill:
         try:
             pending = _deep_scan(state, args, while_afk=True)
-        except (ConnectionError, HTTPError) as e:
+        except SERVER_ERRORS as e:
             logger.warning(f"Pending-period check failed: {e}")
 
     def still_in_this_afk_period() -> bool:
@@ -564,7 +582,7 @@ def _handle_still_afk(state: AWAfkPromptClient, args, prompted_ongoing_start) ->
         """
         try:
             others = sorted(_rescan_hook(state, args)(), key=lambda e: e.timestamp)
-        except (ConnectionError, HTTPError) as e:
+        except SERVER_ERRORS as e:
             logger.debug(f"Live queue recount failed, keeping the current count: {e}")
             return {}
         return {"queue_info": _build_queue_info([ongoing, *others])}
@@ -667,13 +685,14 @@ def get_state_retries(
                 presence_buckets=presence_buckets,
                 presence_timeout=presence_timeout,
             )
-        except ConnectionError:
+        except SERVER_ERRORS:
             logger.exception("Cannot connect to client.")
             time.sleep(10)  # 10 * 10 = wait for 100s before giving up.
     raise AWAfkPromptError("Could not get a connection to the server.")
 
 
 def main() -> None:
+    enable_stack_dumps()
     # Load config from file (falls back to defaults if file doesn't exist)
     config = load_config()
 
@@ -887,7 +906,7 @@ def main() -> None:
         logger.info(f"Edit mode: reviewing entries from {args.edit_date}")
 
         try:
-            client = ActivityWatchClient(client_name=WATCHER_NAME + "_edit", testing=args.testing)
+            client = ActivityWatchClientWithTimeout(client_name=WATCHER_NAME + "_edit", testing=args.testing)
             with client:
                 bucket_id = f"{WATCHER_NAME}_{client.client_hostname}"
 
@@ -931,9 +950,7 @@ def main() -> None:
     # when the daemon is already running.
     effective_client_name = WATCHER_NAME + "_backfill" if args.backfill_only else WATCHER_NAME
     try:
-        client = ActivityWatchClient(  # pyright: ignore[reportPrivateImportUsage]
-            client_name=effective_client_name, testing=args.testing
-        )
+        client = ActivityWatchClientWithTimeout(client_name=effective_client_name, testing=args.testing)
         with client:
             state = get_state_retries(
                 client,
@@ -959,7 +976,7 @@ def main() -> None:
                 logger.info(f"Backfill mode enabled, looking back {args.backfill_depth} minutes")
                 try:
                     backfill_events = _deep_scan(state, args)
-                except (ConnectionError, HTTPError) as e:
+                except SERVER_ERRORS as e:
                     logger.warning(f"Backfill failed due to server error: {e}")
                     backfill_events = []
                 if _process_events(
@@ -1069,7 +1086,7 @@ def main() -> None:
                         logger.info("Server connection restored.")
                     server_down_since = None
                     server_down_notified = False
-                except (ConnectionError, HTTPError) as e:
+                except SERVER_ERRORS as e:
                     if server_down_since is None:
                         server_down_since = time.monotonic()
                         logger.warning(f"Server connection error: {e}")
