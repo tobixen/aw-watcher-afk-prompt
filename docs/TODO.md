@@ -38,6 +38,11 @@ This document tracks planned improvements, known issues, and future work for the
   - Implement inline editing
 
 ### Code Quality
+- [ ] Get request timeouts into aw-client upstream, then drop our override
+  - aw-client sends every request without a timeout; `ActivityWatchClientWithTimeout`
+    (core.py) copies its `_get`/`_post`/`_delete` to add one
+  - aw-client is unpinned, so if those methods change upstream the copy quietly
+    diverges
 - [ ] An unanswered split dialog blocks the watcher indefinitely
       (split_dialog.py, no `after(` anywhere in it)
   - The ordinary prompt auto-snoozes after `timeout_ms` and comes back later
