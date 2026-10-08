@@ -89,8 +89,15 @@ Currently, when a user returns from an extended AFK period during which they per
 - When editing a line's start time (not first line):
   - Previous line's duration adjusts to reach the new start time
   - All subsequent lines shift their start times accordingly
-- All changes update in real-time as user types
-- Invalid states (negative durations, gaps, overlaps) are prevented
+  - The typed time is applied on Enter, Tab or leaving the field, not per
+    keystroke; Enter in the field applies it without closing the dialog
+  - It lands on the day that puts it inside the AFK period after the previous
+    line, so 00:30 in a night that began 22:16 is the next morning
+  - A rejected time is reverted; one still in the field when OK is pressed is
+    reported and left there to be corrected
+- Description and duration changes update in real-time as user types
+- Invalid states (negative durations, gaps, overlaps) are prevented once a
+  typed start time is applied
 
 ### FR6: Validation Rules
 

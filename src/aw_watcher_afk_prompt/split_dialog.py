@@ -740,8 +740,7 @@ class ActivityLineWidget:
         # Use locale-aware formatting with timezone conversion
         start_str = format_time_local(activity.start_time, include_seconds=is_first)
         self.start_var = tk.StringVar(master=parent, value=start_str)
-        if not is_first:
-            self.start_var.trace_add("write", lambda *args: self._on_start_change())
+        self._shown_start = start_str
         self.start_entry = ttk.Entry(
             parent,
             textvariable=self.start_var,
@@ -750,6 +749,12 @@ class ActivityLineWidget:
             takefocus=0 if is_first else 1,
         )
         self.start_entry.grid(row=row, column=1, padx=5, pady=2)
+        # Applied on commit, not per keystroke: a half-typed time like "00:3"
+        # is valid, and recalculating rewrote the field while it was typed in.
+        # Enter here only commits; "break" keeps it from also pressing OK.
+        if not is_first:
+            self.start_entry.bind("<Return>", lambda e: (self.commit_start(), "break")[1])
+            self.start_entry.bind("<FocusOut>", lambda e: self.commit_start())
 
         self.hours_mode = False
 
@@ -792,12 +797,23 @@ class ActivityLineWidget:
         # Notify parent about description change
         self.on_change(field="description", value=desc)
 
-    def _on_start_change(self):
-        """Handle start time change."""
-        start = self.start_var.get()
-        logger.debug(f"Activity {self.index} start time changed to: '{start}'")
-        # Notify parent about start time change
-        self.on_change(field="start_time", value=start)
+    def commit_start(self, revert: bool = True) -> bool:
+        """Apply a typed start time.
+
+        Args:
+            revert: Put the shown time back if the typed one is rejected
+
+        Returns False if the typed time was rejected.
+        """
+        start = self.start_var.get().strip()
+        if self.is_first or start == self._shown_start:
+            return True
+        logger.debug(f"Activity {self.index} start time committed: '{start}'")
+        if self.on_change(field="start_time", value=start):
+            return True
+        if revert:
+            self.start_var.set(self._shown_start)
+        return False
 
     def _on_duration_change(self):
         """Handle duration change."""
@@ -886,19 +902,17 @@ class ActivityLineWidget:
         # Temporarily remove traces to avoid triggering callbacks
         desc_trace_id = self.desc_var.trace_info()[0][1] if self.desc_var.trace_info() else None
         duration_trace_id = self.duration_var.trace_info()[0][1] if self.duration_var.trace_info() else None
-        start_trace_id = self.start_var.trace_info()[0][1] if self.start_var.trace_info() and not is_first else None
 
         if desc_trace_id:
             self.desc_var.trace_remove("write", desc_trace_id)
         if duration_trace_id:
             self.duration_var.trace_remove("write", duration_trace_id)
-        if start_trace_id:
-            self.start_var.trace_remove("write", start_trace_id)
 
         # Update values
         self.desc_var.set(activity.description)
         start_str = format_time_local(activity.start_time, include_seconds=is_first)
         self.start_var.set(start_str)
+        self._shown_start = start_str
         self.duration_var.set(activity.duration_minutes)
         self.duration_info_var.set(_format_duration_info(activity.duration_minutes))
         if self.hours_mode:
@@ -907,8 +921,6 @@ class ActivityLineWidget:
         # Re-add traces
         self.desc_var.trace_add("write", lambda *args: self._on_desc_change())
         self.duration_var.trace_add("write", lambda *args: self._on_duration_change())
-        if not is_first:
-            self.start_var.trace_add("write", lambda *args: self._on_start_change())
 
 
 class SplitActivityDialog(simpledialog.Dialog):
@@ -1066,16 +1078,21 @@ class SplitActivityDialog(simpledialog.Dialog):
             widget.hours_entry.bind("<Tab>", make_duration_handler(next_w))
             widget.hours_entry.bind("<ISO_Left_Tab>", make_duration_handler(prev_w))
 
-    def on_activity_changed(self, changed_index: int, field: str, value):
+    def on_activity_changed(self, changed_index: int, field: str, value) -> bool:
         """Handle changes to any activity field.
 
         Args:
             changed_index: Index of the activity that was changed
             field: Which field was changed ('description', 'start_time', or 'duration')
             value: The new value
+
+        Returns:
+            False if the change was rejected
         """
         # Mark that user has made edits (disable equal distribution mode)
         self.equal_distribution_mode = False
+        if field != "start_time":
+            self.commit_pending_starts()
 
         try:
             if field == "description":
@@ -1114,30 +1131,36 @@ class SplitActivityDialog(simpledialog.Dialog):
                 if changed_index == 0:
                     # First activity start time is not editable
                     logger.warning("Cannot edit start time of first activity")
-                    return
+                    return False
 
                 try:
                     # Parse HH:MM format
                     parts = value.split(":")
                     if len(parts) != 2:
                         logger.warning(f"Invalid start time format: {value}")
-                        return
+                        return False
 
                     hours = int(parts[0])
                     minutes = int(parts[1])
 
                     if hours < 0 or hours > 23 or minutes < 0 or minutes > 59:
                         logger.warning(f"Invalid time values: {hours}:{minutes}")
-                        return
+                        return False
 
-                    # Create new datetime with same date but updated time.
                     # The widget displays times in local timezone (format_time_local),
-                    # so the user-entered hour/minute are in local time — convert
-                    # before replacing to avoid treating them as UTC.
-                    old_start = self.activities[changed_index].start_time
-                    new_start = old_start.astimezone(LOCAL_TIMEZONE).replace(
-                        hour=hours, minute=minutes, second=0, microsecond=0
-                    )
+                    # so the user-entered hour/minute are in local time.  Only the
+                    # time is typed: take the day that puts it closest to the old
+                    # start, so 00:30 in a night that started 22:16 is the next day.
+                    old_start = self.activities[changed_index].start_time.astimezone(LOCAL_TIMEZONE)
+                    candidates = [
+                        (old_start + timedelta(days=days)).replace(hour=hours, minute=minutes, second=0, microsecond=0)
+                        for days in (-1, 0, 1)
+                    ]
+                    # A day that puts it inside the period, after the previous line,
+                    # wins over a closer one that doesn't (periods over 12 hours).
+                    previous_start = self.activities[changed_index - 1].start_time
+                    inside = [c for c in candidates if previous_start < c < self.afk_end]
+                    new_start = min(inside or candidates, key=lambda c: abs(c - old_start))
 
                     logger.debug(f"Activity {changed_index} start time changed to {new_start.strftime('%H:%M')}")
 
@@ -1160,13 +1183,28 @@ class SplitActivityDialog(simpledialog.Dialog):
 
                 except (ValueError, IndexError) as e:
                     logger.warning(f"Error parsing start time '{value}': {e}")
+                    return False
 
         except (ValueError, tk.TclError) as e:
             logger.warning(f"Error updating activity {changed_index}: {e}")
-            pass
+            return False
+        return True
+
+    def commit_pending_starts(self) -> list[str]:
+        """Commit start times still being typed, before anything redraws them.
+
+        Returns the typed times that were rejected (and left in place).
+        """
+        rejected = []
+        for widget in self.activity_widgets:
+            typed = widget.start_var.get()
+            if not widget.commit_start(revert=False):
+                rejected.append(typed)
+        return rejected
 
     def add_activity_line(self):
         """Add a new activity line, preserving lock state of existing lines."""
+        self.commit_pending_starts()
         locked_states = [w.is_locked() for w in self.activity_widgets]
         locked_indices = {i for i, locked in enumerate(locked_states) if locked}
         # A locked line's duration must never change, so equal redistribution
@@ -1188,6 +1226,7 @@ class SplitActivityDialog(simpledialog.Dialog):
 
     def remove_activity_line(self, index: int):
         """Remove an activity line, preserving lock state of the remaining lines."""
+        self.commit_pending_starts()
         locked_states = [w.is_locked() for i, w in enumerate(self.activity_widgets) if i != index]
         self.activities = TimeCalculator.remove_activity(self.activities, index)
 
@@ -1226,6 +1265,13 @@ class SplitActivityDialog(simpledialog.Dialog):
 
     def validate(self) -> bool:
         """Validate the split activity data before accepting."""
+        # A start time still being typed when OK is clicked has seen no FocusOut.
+        # A rejected one stays in its field, for the user to correct.
+        rejected = self.commit_pending_starts()
+        if rejected:
+            tk.messagebox.showerror("Invalid Split", f"Invalid start time: {rejected[0]}")
+            return False
+
         # Create SplitActivityData and validate
         data = SplitActivityData(
             original_start=self.afk_start,
