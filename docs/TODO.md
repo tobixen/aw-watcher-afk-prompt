@@ -38,6 +38,11 @@ This document tracks planned improvements, known issues, and future work for the
   - Implement inline editing
 
 ### Code Quality
+- [ ] A focus change nobody made can confirm a zero-length return
+  - `_confirmed_return` takes any window change at least 1 s after a
+    zero-length not-afk event as evidence the user is back. This watcher's own
+    dialog taking focus (e.g. a deferred gap shown at a resume) or an app
+    stealing focus passes too. Ignore the watcher's own windows in that check.
 - [ ] Get request timeouts into aw-client upstream, then drop our override
   - aw-client sends every request without a timeout; `ActivityWatchClientWithTimeout`
     (core.py) copies its `_get`/`_post`/`_delete` to add one

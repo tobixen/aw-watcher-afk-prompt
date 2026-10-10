@@ -121,6 +121,75 @@ def test_double_ask_suspend_afk():
     assert second_unseen[0].duration.total_seconds() == (expected_end - expected_start).total_seconds()
 
 
+def test_zero_length_return_event_confirmed_by_window_activity():
+    """A zero-length not-afk event backed by window activity ends the gap.
+
+    aw-watcher-window-wayland backdates its not-afk heartbeats by the idle
+    timeout (~2 min), so for that long after the user returns, the new not-afk
+    event stays zero-length. Dropping it like a resume blip (see
+    test_double_ask_suspend_afk) hid the just-ended period until two minutes
+    after the return -- or, when the user left again within those two minutes,
+    until the *next* absence reached --length (observed 2026-10-10: answered
+    "(1 of 2)", the second period was not asked for another 6.5 minutes).
+    Window heartbeats are not backdated, so a window change *after* the return
+    shows the user really is back. Window events at the very moment of the
+    return don't: the watcher reports the focused window on every resume.
+    """
+    events = [
+        _tuple_to_event(t)
+        for t in [
+            (0, 60, NOT_AFK),
+            (180, 400, AFK),
+            (600, 0, NOT_AFK),  # just returned: still zero-length
+        ]
+    ]
+    window_events = [_make_window_event(600, 0), _make_window_event(602, 5)]
+
+    blip = list(AWAfkPromptState([]).get_unseen_afk_events(events, INF, 300, min_not_afk_duration=10))
+    assert blip == [], "without window activity it is a blip, as before"
+
+    at_resume = [_make_window_event(600, 0), _make_window_event(600, 118)]
+    blip = list(
+        AWAfkPromptState([]).get_unseen_afk_events(events, INF, 300, window_events=at_resume, min_not_afk_duration=10)
+    )
+    assert blip == [], "window events only at the resume moment are no evidence"
+
+    unseen = list(
+        AWAfkPromptState([]).get_unseen_afk_events(
+            events, INF, 300, window_events=window_events, min_not_afk_duration=10
+        )
+    )
+    assert [_event_to_tuple(e) for e in unseen] == [(60, 540)]
+
+
+def test_resume_blip_with_window_activity_at_the_resume():
+    """test_double_ask_suspend_afk, with the window watcher reporting the focused
+    window at the moment of the resume, as it does. Taking that as a return
+    asked about the period up to the blip, and once that was answered the longer
+    period up to the real return overlapped it and was never asked about.
+    """
+    # fmt: off
+    first = [("2023-10-13T07:09:50.154000-04:00", 1724.216, "not-afk"), ("2023-10-12T23:40:00.083000-04:00", 26990.07, "afk"), ("2023-10-12T23:39:49.928000-04:00", 10.155, "not-afk"), ("2023-10-12T22:19:22.173000-04:00", 4827.754, "afk"), ("2023-10-13T08:41:50.337000-04:00", 0.0, "not-afk")]
+    second = [("2023-10-13T07:09:50.154000-04:00", 1724.216, "not-afk"), ("2023-10-12T23:40:00.083000-04:00", 26990.07, "afk"), ("2023-10-12T23:39:49.928000-04:00", 10.155, "not-afk"), ("2023-10-12T22:19:22.173000-04:00", 4827.754, "afk"), ("2023-10-13T08:41:50.337000-04:00", 348.454, "afk"), ("2023-10-13T08:47:38.792000-04:00", 10.149, "not-afk")]
+    # fmt: on
+    first = sorted((_tuple_to_event(t) for t in first), key=lambda e: e.timestamp)
+    second = sorted((_tuple_to_event(t) for t in second), key=lambda e: e.timestamp)
+    resume = datetime.datetime.fromisoformat("2023-10-13T08:41:50.337000-04:00")
+    window_events = [
+        aw_core.Event(timestamp=resume, duration=datetime.timedelta(seconds=118), data={"app": "Toplevel"})
+    ]
+
+    state = AWAfkPromptState([])
+    for event in state.get_unseen_afk_events(first, INF, 3 * 60, window_events=window_events):
+        state.mark_event_as_seen(event)
+    second_unseen = list(state.get_unseen_afk_events(second, INF, 3 * 60, window_events=window_events))
+
+    assert len(second_unseen) == 1
+    assert second_unseen[0].timestamp + second_unseen[0].duration == datetime.datetime.fromisoformat(
+        "2023-10-13T08:47:38.792000-04:00"
+    )
+
+
 def test_long_afk_over_24_hours():
     """Test that AFK periods >= 24 hours are detected correctly.
 

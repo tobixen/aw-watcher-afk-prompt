@@ -246,6 +246,33 @@ def adjust_gap_start_for_window_activity(
     return aw_core.Event(None, afk_event_start, new_duration, gap.data)
 
 
+# How long after a zero-length not-afk event a window change must start to count
+# as the user being back. The window watcher reports the focused window at the
+# very moment of every resume, and a focus change follows within milliseconds
+# when the pointer happens to rest on another window (observed: 1.2 ms).
+_RETURN_EVIDENCE_DELAY = datetime.timedelta(seconds=1)
+
+
+def _confirmed_return(events: list[aw_core.Event], window_events: list[aw_core.Event]) -> aw_core.Event | None:
+    """The newest event, if it is a zero-length not-afk event that a later window change backs up.
+
+    Window heartbeats are not backdated the way aw-watcher-window-wayland's
+    not-afk heartbeats are, so a window change after a zero-length not-afk event
+    suggests a real return rather than a resume blip. It is a heuristic: a
+    pointer drifting over windows after a bump passes it too, and so does a
+    focus change nobody made -- this watcher's own dialog appearing, or an app
+    stealing focus. Once an afk event follows, the event was no return at all.
+    """
+    if not events:
+        return None
+    newest = max(events, key=lambda e: e.timestamp)
+    if is_afk(newest) or newest.duration.total_seconds() > 0:
+        return None
+    if any(w.timestamp >= newest.timestamp + _RETURN_EVIDENCE_DELAY for w in window_events):
+        return newest
+    return None
+
+
 def is_currently_afk(events: list[aw_core.Event], stale_after: float = PRESENCE_TIMEOUT_SECONDS) -> bool:
     """Is the user away right now, as far as the feed can say?
 
@@ -943,7 +970,11 @@ class AWAfkPromptState:
         # Filter out events that have zero length. Sometimes a zero length not-afk event is generated if you open
         # up your computer from being suspended but don't do anything with it. This event is overwritten soon and
         # doesn't exist in later queries. If we don't filter them out we can ask the user to fill the time in twice.
-        events = [e for e in events if e.duration.total_seconds() > 0]
+        # Except the newest not-afk event when window activity confirms the user is back: aw-watcher-window-wayland
+        # backdates not-afk heartbeats by the idle timeout, so after a return that event stays zero-length for ~2
+        # minutes, and dropping it would hide the just-ended gap for as long.
+        returned = _confirmed_return(events, window_events or [])
+        events = [e for e in events if e.duration.total_seconds() > 0 or e is returned]
 
         # Use gaps in non-afk events instead of the afk-events themselves to handle when the computer
         # is suspended or powered off.
