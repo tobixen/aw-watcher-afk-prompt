@@ -391,7 +391,7 @@ def _ongoing_check(state: AWAfkPromptClient, args) -> Callable[[], bool]:
     Used both to count the still-running period into queue totals and to tell an
     open dialog whether there is anyone there to see it.
     """
-    return lambda: state.get_ongoing_afk_event(args.length * 60) is not None
+    return lambda: state.get_ongoing_afk_event(args.length * 60, min_not_afk_duration=args.min_active) is not None
 
 
 def _process_events(
@@ -540,7 +540,7 @@ def _handle_still_afk(state: AWAfkPromptClient, args, prompted_ongoing_start) ->
     untouched, so the live dialog still appears on a later poll after they have
     been cleared.
     """
-    ongoing = state.get_ongoing_afk_event(args.length * 60)
+    ongoing = state.get_ongoing_afk_event(args.length * 60, min_not_afk_duration=args.min_active)
     if ongoing is None or ongoing.timestamp == prompted_ongoing_start:
         # Not AFK long enough, or we've already shown the live dialog for this period.
         return _StillAfkResult(prompted_ongoing_start, snoozed=False, deep_scan="keep")
@@ -567,7 +567,7 @@ def _handle_still_afk(state: AWAfkPromptClient, args, prompted_ongoing_start) ->
         and suppress the dialog for the rest of the period. A real touch moves the
         start by at least ``--length``, far beyond this tolerance.
         """
-        current = state.get_ongoing_afk_event(args.length * 60)
+        current = state.get_ongoing_afk_event(args.length * 60, min_not_afk_duration=args.min_active)
         if current is None:
             return False
         drift = abs((current.timestamp - ongoing.timestamp).total_seconds())

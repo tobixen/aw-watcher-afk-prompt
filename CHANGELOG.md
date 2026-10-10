@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A brief touch while you are away no longer splits the absence.** The part before the touch could go unasked about, or be asked about twice.
 - **An AFK period that just ended is now asked about as soon as you are back and switch windows**, not up to two minutes later — or, if you left again within those two minutes, only after your next absence.
 - **A stalled request to aw-server can no longer freeze the watcher.** aw-client sends its requests without a timeout, so one connection the server never answered blocked the watcher for good — no prompts, no auto-snooze, nothing in the log. That is the most likely explanation for a 29-hour silence that ended only with a restart, though it was never confirmed. Requests now time out (5 s to connect, 20 s to answer), and a timeout is handled like any other server error.
 - **Typing a start time in the split dialog now works.** Every keystroke was applied at once, so a half-typed time like `00:3` was taken as 00:03 and the field was rewritten under the cursor. A time after midnight was also put on the wrong day and refused. The start time is now applied on Enter, Tab or leaving the field, a rejected one is put back, and 00:30 in a night that began at 22:16 means the next morning.

@@ -297,17 +297,23 @@ def is_currently_afk(events: list[aw_core.Event], stale_after: float = PRESENCE_
 
 
 def get_ongoing_afk_start(
-    events: list[aw_core.Event], stale_after: float = PRESENCE_TIMEOUT_SECONDS
+    events: list[aw_core.Event],
+    stale_after: float = PRESENCE_TIMEOUT_SECONDS,
+    min_not_afk_duration: float = 0.0,
 ) -> datetime.datetime | None:
     """Return the start of the currently-ongoing AFK period, or None if not currently AFK.
 
     The start is defined as the end of the last not-afk event (when activity stopped).
+    Not-afk blips shorter than ``min_not_afk_duration`` are skipped, as gap
+    detection does, so a brief touch doesn't restart the period -- except the
+    newest event, which is the "back at keyboard" signal and may still be short.
     Returns None when the user is present (see is_currently_afk), the list is empty,
     or there are no not-afk events to anchor the start.
     """
     if not is_currently_afk(events, stale_after):
         return None
-    non_afk = [e for e in events if not is_afk(e)]
+    last = events[-1]
+    non_afk = [e for e in events if not is_afk(e) and (e.duration.total_seconds() >= min_not_afk_duration or e is last)]
     if not non_afk:
         return None
     last_non_afk = non_afk[-1]
@@ -757,14 +763,15 @@ class AWAfkPromptClient:
             seen.extend(e.timestamp for e in events)
         return max(seen) if seen else None
 
-    def get_ongoing_afk_event(self, durration_thresh: float) -> aw_core.Event | None:
+    def get_ongoing_afk_event(self, durration_thresh: float, min_not_afk_duration: float = 0.0) -> aw_core.Event | None:
         """Return a synthetic event for the currently-ongoing AFK period if long enough to prompt.
 
         Used to show a live-updating dialog before the user returns to the computer.
         Returns None if not currently AFK or the AFK duration is below the threshold.
+        Not-afk blips shorter than ``min_not_afk_duration`` don't end the period.
         """
         all_events, _ = self._fetch_events_with_dynamic_limit()
-        afk_start = get_ongoing_afk_start(all_events, self.presence_timeout)
+        afk_start = get_ongoing_afk_start(all_events, self.presence_timeout, min_not_afk_duration)
         if afk_start is None:
             return None
         duration = get_utc_now() - afk_start
@@ -975,16 +982,22 @@ class AWAfkPromptState:
         # minutes, and dropping it would hide the just-ended gap for as long.
         returned = _confirmed_return(events, window_events or [])
         events = [e for e in events if e.duration.total_seconds() > 0 or e is returned]
+        # Whether the newest remaining event is not-afk, i.e. the user may be back:
+        # only then is the newest not-afk event exempt from --min-active below.
+        # Judged after the filter, so a dropped return doesn't pass its exemption
+        # on to an earlier brief touch.
+        newest_is_not_afk = bool(events) and not is_afk(max(events, key=lambda e: e.timestamp))
 
         # Use gaps in non-afk events instead of the afk-events themselves to handle when the computer
         # is suspended or powered off.
         non_afk_events = squash_overlaps([e for e in events if not is_afk(e)])
         if min_not_afk_duration > 0:
-            # Always preserve the most recent not-afk event as the right boundary for gap
-            # detection. If the user just returned (e.g. after boot/resume), the ongoing
-            # not-afk event may still be very short, but it IS the "back at keyboard" signal
-            # and must not be filtered out.
-            last_idx = len(non_afk_events) - 1
+            # Preserve the most recent not-afk event as the right boundary for gap
+            # detection while it is the newest event. If the user just returned (e.g.
+            # after boot/resume), it may still be very short, but it IS the "back at
+            # keyboard" signal and must not be filtered out. With an afk event after
+            # it, it was a brief touch like any other.
+            last_idx = len(non_afk_events) - 1 if newest_is_not_afk else -1
             filtered = [
                 e
                 for i, e in enumerate(non_afk_events)

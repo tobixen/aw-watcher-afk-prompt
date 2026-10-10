@@ -190,6 +190,64 @@ def test_resume_blip_with_window_activity_at_the_resume():
     )
 
 
+def _brief_touch_while_away(touch_duration: int) -> list[aw_core.Event]:
+    """An hour away, a brief touch, and away again, still ongoing (observed 2026-10-08).
+
+    As there, the next afk event starts when the idle timeout runs out after the touch.
+    """
+    return [
+        _tuple_to_event(t)
+        for t in [
+            (0, 120, NOT_AFK),
+            (120, 3600, AFK),
+            (3720, touch_duration, NOT_AFK),
+            (3720 + touch_duration + 120, 3600, AFK),
+        ]
+    ]
+
+
+def test_brief_touch_while_away_does_not_end_a_gap():
+    """A touch shorter than --min-active, followed by more absence, is no return.
+
+    Gap detection exempted the newest not-afk event from --min-active even with
+    an afk event after it, so the still-AFK backfill asked about the hour up to
+    the touch -- and then the live dialog, which merges across the touch, asked
+    about the same hour again.
+    """
+    found = list(
+        AWAfkPromptState([]).get_unseen_afk_events(_brief_touch_while_away(3), INF, 300, min_not_afk_duration=10)
+    )
+    assert found == []
+
+    # The zero-length variant, with the window events recorded on 2026-10-08:
+    # the focused window at the touch, and the dialog taking focus.
+    window_events = [_make_window_event(3720, 0), _make_window_event(3720, 118)]
+    found = list(
+        AWAfkPromptState([]).get_unseen_afk_events(
+            _brief_touch_while_away(0), INF, 300, window_events=window_events, min_not_afk_duration=10
+        )
+    )
+    assert found == []
+
+    # A window change after the touch is no return either when an afk event
+    # follows -- even with --min-active off, which would otherwise keep it.
+    window_events = [_make_window_event(3725, 5)]
+    found = list(
+        AWAfkPromptState([]).get_unseen_afk_events(_brief_touch_while_away(0), INF, 300, window_events=window_events)
+    )
+    assert found == []
+
+
+def test_brief_touch_then_a_return_without_window_change():
+    """The return is still zero-length and unconfirmed, so it is dropped -- which
+    must not make the touch before it count as the return: that asked about the
+    first hour only, and the merged period later counted as answered.
+    """
+    events = [*_brief_touch_while_away(3), _tuple_to_event((3843 + 3600, 0, NOT_AFK))]
+    found = list(AWAfkPromptState([]).get_unseen_afk_events(events, INF, 300, min_not_afk_duration=10))
+    assert found == []
+
+
 def test_long_afk_over_24_hours():
     """Test that AFK periods >= 24 hours are detected correctly.
 
@@ -879,6 +937,53 @@ def test_get_ongoing_afk_start_returns_end_of_last_not_afk():
     result = get_ongoing_afk_start([_tuple_to_event(t) for t in events])
     expected = FIRST_DATE + datetime.timedelta(seconds=150)  # end of not-afk at t=100, duration=50
     assert result == expected
+
+
+def _blip_events() -> list[aw_core.Event]:
+    """An hour away, a three-second mouse bump, and away again (observed 2026-10-08).
+
+    aw-watcher-window-wayland recorded the bump as a zero-length not-afk event.
+    """
+    return [
+        _recent(3720 + 3600 + 120, 120, NOT_AFK),  # working
+        _recent(3720, 3600, AFK),  # away for an hour
+        _recent(3720, 0, NOT_AFK),  # the bump
+        _recent(0, 3600, AFK),  # away again, ongoing
+    ]
+
+
+def test_get_ongoing_afk_start_skips_short_blips():
+    """A blip shorter than --min-active must not restart the ongoing period.
+
+    Gap detection already merges across such blips. The live dialog did not, so
+    after the bump it asked about "the period from 17:42", the answer covered only
+    the last 20 minutes, and the merged gap then counted as answered: the first
+    hour was never asked about.
+    """
+    events = _blip_events()
+    work_end = events[0].timestamp + events[0].duration
+    assert get_ongoing_afk_start(events) == events[2].timestamp, "without --min-active the blip counts, as before"
+    assert get_ongoing_afk_start(events, min_not_afk_duration=10) == work_end
+
+    events[2] = _recent(3720 - 3, 3, NOT_AFK)  # a three-second touch
+    assert get_ongoing_afk_start(events, min_not_afk_duration=10) == work_end
+
+
+def test_get_ongoing_afk_start_keeps_the_newest_short_not_afk_event():
+    """The newest not-afk event is the "back at keyboard" signal and may still be short."""
+    events = [_recent(4000, 100, NOT_AFK), _recent(30, 3870, AFK), _recent(25, 5, NOT_AFK)]
+    assert (
+        get_ongoing_afk_start(events, stale_after=20, min_not_afk_duration=10)
+        == events[2].timestamp + events[2].duration
+    )
+
+
+def test_get_ongoing_afk_event_threads_min_active_through():
+    events = _blip_events()
+    client = _make_prompt_client(events)
+    ongoing = client.get_ongoing_afk_event(durration_thresh=5 * 60, min_not_afk_duration=10)
+    assert ongoing is not None
+    assert ongoing.timestamp == events[0].timestamp + events[0].duration
 
 
 def test_dead_feed_produces_a_promptable_ongoing_period():

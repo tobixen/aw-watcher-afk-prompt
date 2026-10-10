@@ -331,6 +331,27 @@ class TestHandleStillAfk:
 
         assert captured["while_afk"] is True
 
+    def test_ongoing_period_ignores_blips_shorter_than_min_active(self, monkeypatch) -> None:
+        """Both the period shown and the "same period?" check skip blips below
+        --min-active, as gap detection does (see test_get_ongoing_afk_start_skips_short_blips)."""
+        state = self._state_with_ongoing(self._ongoing_event())
+        captured: dict = {}
+
+        def fake_prompt_ongoing(*a, still_afk_check, **k):  # noqa: ARG001
+            still_afk_check()
+
+        monkeypatch.setattr(main, "_deep_scan", lambda *a, **k: [])
+        monkeypatch.setattr(main, "prompt_ongoing", fake_prompt_ongoing)
+        monkeypatch.setattr(main, "_post_ongoing_response", lambda *a, **k: captured.update(k))
+        args = self._args()
+        args.min_active = 10.0
+
+        main._handle_still_afk(state, args, prompted_ongoing_start=None)
+
+        assert state.get_ongoing_afk_event.call_count == 2
+        for call in state.get_ongoing_afk_event.call_args_list:
+            assert call.kwargs.get("min_not_afk_duration") == 10.0
+
     def test_deep_scan_forwards_while_afk_flag(self) -> None:
         """_deep_scan(while_afk=True) must translate into include_while_afk=True
         on the core scan call."""
@@ -670,8 +691,10 @@ class TestQueueCountSurvivesTheUserWanderingOff:
         state = _fake_state()
         state.get_ongoing_afk_event = MagicMock(return_value=None)
 
-        assert main._ongoing_check(state, self._args())() is False
-        state.get_ongoing_afk_event.assert_called_once_with(300.0)
+        args = self._args()
+        args.min_active = 10.0
+        assert main._ongoing_check(state, args)() is False
+        state.get_ongoing_afk_event.assert_called_once_with(300.0, min_not_afk_duration=10.0)
 
     def test_ongoing_check_hook_reports_a_running_period(self) -> None:
         state = _fake_state()
