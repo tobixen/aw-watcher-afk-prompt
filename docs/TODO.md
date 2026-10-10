@@ -90,6 +90,10 @@ This document tracks planned improvements, known issues, and future work for the
   - Consider migration path
 
 ### Split Feature Enhancements
+- [ ] Start times can't be typed back under a 12-hour locale
+  - `format_time_local` shows e.g. "2:30 PM" where the locale prefers 12-hour
+    time, but the start-time field only parses `HH:MM`, so an edited time in
+    that format is rejected.  Parse what is displayed (or always display 24 h).
 - [ ] Add preset split templates
   - Common patterns like "lunch + walk" or "meeting + email"
   - User-defined templates
