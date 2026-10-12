@@ -533,6 +533,36 @@ def test_advance_gap_logged_once_across_polls(caplog):
     assert len(advance_infos) == 1, f"expected 1 INFO advance log across 3 polls, got {len(advance_infos)}"
 
 
+def test_advance_gap_logged_once_across_scans_of_different_depth(caplog):
+    """A narrower scan in between must not make the next wider scan re-log a gap.
+
+    Regression (observed 2026-10-12): the regular poll scans a shorter range than
+    the backfill scan, so it did not see the older pending gaps and forgot it had
+    logged them; every backfill scan then logged all of them at INFO again.
+    """
+    import logging
+
+    afk_events = [
+        _tuple_to_event(t)
+        for t in [
+            (0, 120, NOT_AFK),
+            (240, 360, AFK),
+            (600, 60, NOT_AFK),
+        ]
+    ]
+    window_events = [_make_window_event(120, 120)]
+    state = AWAfkPromptState([])
+
+    with caplog.at_level(logging.DEBUG, logger="aw_watcher_afk_prompt.core"):
+        for _ in range(3):
+            list(state.get_unseen_afk_events(afk_events, INF, 300, window_events))
+            # The narrow scan: only the newest event, no gap in sight.
+            list(state.get_unseen_afk_events(afk_events[-1:], INF, 300, window_events))
+
+    advance_infos = [r for r in caplog.records if r.levelno == logging.INFO and "Advancing gap start" in r.getMessage()]
+    assert len(advance_infos) == 1, f"expected 1 INFO advance log, got {len(advance_infos)}"
+
+
 def test_window_fetch_time_bounded_so_adjustment_is_stable():
     """The window-event fetch must cover the whole scanned range, not just the
     most recent ``history_limit`` events.

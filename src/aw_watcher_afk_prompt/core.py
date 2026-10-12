@@ -252,6 +252,11 @@ def adjust_gap_start_for_window_activity(
 # when the pointer happens to rest on another window (observed: 1.2 ms).
 _RETURN_EVIDENCE_DELAY = datetime.timedelta(seconds=1)
 
+# How long a logged gap-start advance is remembered, counted back from the newest
+# one. Scans differ in depth, so presence in the latest scan says nothing about
+# whether a gap is still pending; age is what keeps the set bounded.
+_LOGGED_ADVANCE_RETENTION = datetime.timedelta(days=7)
+
 
 def _confirmed_return(events: list[aw_core.Event], window_events: list[aw_core.Event]) -> aw_core.Event | None:
     """The newest event, if it is a zero-length not-afk event that a later window change backs up.
@@ -1035,7 +1040,6 @@ class AWAfkPromptState:
         gap_pairs: list[tuple[aw_core.Event, datetime.timedelta]] = [(g, g.duration) for g in pseudo_afk_events]
         if window_events:
             adjusted: list[tuple[aw_core.Event, datetime.timedelta]] = []
-            logged_now: set[datetime.datetime] = set()
             for gap in pseudo_afk_events:
                 new_gap = adjust_gap_start_for_window_activity(gap, events, window_events)
                 advance = (new_gap.timestamp - gap.timestamp).total_seconds()
@@ -1044,15 +1048,15 @@ class AWAfkPromptState:
                     # stable across polls — the raw gap start jitters with heartbeats.
                     # Log INFO once per pending gap, DEBUG on repeats.
                     msg = f"Advancing gap start by {advance:.0f}s (window activity present during idle countdown)"
-                    logged_now.add(new_gap.timestamp)
                     if new_gap.timestamp in self._logged_advances:
                         logger.debug(msg)
                     else:
                         logger.info(msg)
+                        self._logged_advances.add(new_gap.timestamp)
                 adjusted.append((new_gap, gap.duration))
-            # Keep only currently-pending advanced gaps so the set stays bounded and a
-            # gap that disappears then reappears is logged afresh.
-            self._logged_advances = logged_now
+            if self._logged_advances:
+                horizon = max(self._logged_advances) - _LOGGED_ADVANCE_RETENTION
+                self._logged_advances = {t for t in self._logged_advances if t >= horizon}
             gap_pairs = adjusted
 
         # Re-present any gaps that previously expired from the depth window but were
