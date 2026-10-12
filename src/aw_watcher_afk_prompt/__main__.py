@@ -37,6 +37,11 @@ SNOOZE_SECONDS = 300
 # millisecond-offset events). A real return-and-leave-again moves it by minutes.
 _SAME_PERIOD_TOLERANCE_SECONDS = 5.0
 
+# How far past the ongoing period's start the same period, once completed, may
+# start: its start is advanced past the idle countdown (~2 min) when there was
+# window activity in it.
+_COMPLETED_PERIOD_START_SLACK = datetime.timedelta(minutes=10)
+
 # What "the server is in trouble" looks like from here. A timeout belongs with the
 # rest: it is what a stalled request turns into now that requests have one.
 SERVER_ERRORS = (ConnectionError, HTTPError, Timeout)
@@ -579,12 +584,24 @@ def _handle_still_afk(state: AWAfkPromptClient, args, prompted_ongoing_start) ->
         The live dialog is the one on screen while the user is away, so this is
         where "(1 of 3)" has to appear when periods pile up behind it. The ongoing
         period is the one being answered, hence first; the completed gaps follow.
+
+        Once the user is back, the rescan finds the ongoing period itself as a
+        completed gap -- ending after it began, its start possibly advanced past
+        the idle countdown so it no longer matches -- and it must not be counted
+        a second time.
         """
         try:
             others = sorted(_rescan_hook(state, args)(), key=lambda e: e.timestamp)
         except SERVER_ERRORS as e:
             logger.debug(f"Live queue recount failed, keeping the current count: {e}")
             return {}
+        earliest = ongoing.timestamp - datetime.timedelta(seconds=_SAME_PERIOD_TOLERANCE_SECONDS)
+        latest = ongoing.timestamp + _COMPLETED_PERIOD_START_SLACK
+        itself = next(
+            (e for e in others if earliest <= e.timestamp <= latest and e.timestamp + e.duration > ongoing.timestamp),
+            None,
+        )
+        others = [e for e in others if e is not itself]
         return {"queue_info": _build_queue_info([ongoing, *others])}
 
     if pending:

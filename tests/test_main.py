@@ -720,7 +720,7 @@ class TestOngoingDialogQueue:
 
     def _capture_refresh(self, monkeypatch, *, others):
         ongoing = aw_core.Event(
-            id=None, timestamp=datetime(2026, 6, 7, 7, 40, tzinfo=UTC), duration=timedelta(minutes=10)
+            id=None, timestamp=datetime(2026, 6, 7, 13, 0, tzinfo=UTC), duration=timedelta(minutes=10)
         )
         state = _fake_state()
         state.get_ongoing_afk_event = MagicMock(return_value=ongoing)
@@ -746,6 +746,41 @@ class TestOngoingDialogQueue:
 
         assert (queue_info["position"], queue_info["total"]) == (1, 3)
         assert main.format_time_local(_event(10).timestamp) in queue_info["next_str"]
+
+    def test_the_ongoing_period_is_not_counted_twice_once_it_ends(self, monkeypatch) -> None:
+        # Back at the keyboard with the live dialog still open: the rescan now
+        # finds the ongoing period as a completed gap, its start advanced past the
+        # idle countdown -- it is the period being answered, not another one
+        # (observed 2026-10-12: "from 15:43" and "next: 15:44", both 1h40m).
+        completed = aw_core.Event(
+            id=None, timestamp=datetime(2026, 6, 7, 13, 0, 7, tzinfo=UTC), duration=timedelta(minutes=100)
+        )
+        refresh = self._capture_refresh(monkeypatch, others=[_event(10), completed])
+
+        queue_info = refresh()["queue_info"]
+
+        assert (queue_info["position"], queue_info["total"]) == (1, 2)
+
+    def test_a_later_period_is_not_mistaken_for_the_ongoing_one(self, monkeypatch) -> None:
+        # The ongoing period's own gap is not among the rescanned ones (e.g. it
+        # matched an earlier answer); a period starting long after it began is
+        # a different one and still counts.
+        later = aw_core.Event(
+            id=None, timestamp=datetime(2026, 6, 7, 15, 0, tzinfo=UTC), duration=timedelta(minutes=30)
+        )
+        refresh = self._capture_refresh(monkeypatch, others=[_event(10), later])
+
+        queue_info = refresh()["queue_info"]
+
+        assert (queue_info["position"], queue_info["total"]) == (1, 3)
+
+    def test_no_queue_line_when_only_the_ongoing_period_completed(self, monkeypatch) -> None:
+        completed = aw_core.Event(
+            id=None, timestamp=datetime(2026, 6, 7, 13, 0, 7, tzinfo=UTC), duration=timedelta(minutes=100)
+        )
+        refresh = self._capture_refresh(monkeypatch, others=[completed])
+
+        assert refresh()["queue_info"] is None
 
     def test_no_queue_line_when_nothing_else_is_pending(self, monkeypatch) -> None:
         refresh = self._capture_refresh(monkeypatch, others=[])
