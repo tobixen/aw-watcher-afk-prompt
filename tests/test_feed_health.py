@@ -19,6 +19,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import aw_core
+import pytest
 
 import aw_watcher_afk_prompt.__main__ as main
 from aw_watcher_afk_prompt.core import AWAfkPromptClient
@@ -95,6 +96,12 @@ class TestFeedLastSeen:
         assert kwargs["limit"] == 1
 
 
+@pytest.fixture(autouse=True)
+def _no_display(monkeypatch) -> None:
+    """Keep these tests display-free: the warning is parented to the Tk root."""
+    monkeypatch.setattr(main.aw_dialog, "get_root", MagicMock)
+
+
 def _clocks(mono: float, wall_offset_seconds: float = 0.0) -> main._Clocks:
     """Clocks at a fixed wall time, so 'lag' in the tests is exact."""
     wall = datetime.datetime(2026, 8, 25, 6, 50, tzinfo=datetime.UTC) + datetime.timedelta(seconds=wall_offset_seconds)
@@ -163,6 +170,16 @@ class TestCheckAfkFeed:
         feed = main._check_afk_feed(_state(_clocks(0, -20 * 3600).wall), STALE_AFTER, armed, now=_clocks(0).wall)
         assert feed == armed  # still watching, nothing said yet
         box.assert_not_called()
+
+    def test_the_warning_is_removed_from_the_screen_once_dismissed(self, monkeypatch) -> None:
+        """The loop goes back to sleeping after the box; without a flush the
+        dismissed box stays on screen until the next prompt (see show_warning)."""
+        calls = []
+        monkeypatch.setattr(main.messagebox, "showwarning", lambda *a, **kw: calls.append("box"))
+        monkeypatch.setattr(main.aw_dialog, "flush_closed_windows", lambda _w: calls.append("flush"))
+        armed = main._FeedState.armed(STALE_AFTER, "this watcher started", _clocks(0, -(STALE_AFTER * 60 + 60)).wall)
+        main._check_afk_feed(_state(_clocks(0, -20 * 3600).wall), STALE_AFTER, armed, now=_clocks(0).wall)
+        assert calls == ["box", "flush"]
 
     def test_persistent_silence_after_startup_notifies_once(self, monkeypatch) -> None:
         box = MagicMock()

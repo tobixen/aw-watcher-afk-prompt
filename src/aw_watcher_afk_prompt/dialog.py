@@ -90,6 +90,20 @@ def wait_for_display(
     raise AssertionError("unreachable")  # pragma: no cover
 
 
+def show_warning(title: str, message: str) -> None:
+    """Show a warning box from outside any dialog, and take it off the screen after.
+
+    The polling loop goes straight back to sleep once the box returns, so the
+    removal tk_messageBox queues on OK is never sent: the dismissed box stays on
+    screen, unresponsive, until the next prompt (see widgets.flush_closed_windows).
+    """
+    root = get_root()
+    try:
+        messagebox.showwarning(title, message, parent=root)
+    finally:
+        flush_closed_windows(root)
+
+
 def __getattr__(name: str):
     """Keep the historical module-level ``dialog.root`` working, lazily."""
     if name == "root":

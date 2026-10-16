@@ -206,7 +206,7 @@ def _check_afk_feed(
         # today, which for a feed that died yesterday is actively misleading.
         silence = f"last reported {format_duration(now - last_seen)} ago, at {format_time_local(last_seen)}"
     logger.error(f"AFK feed looks dead: {state.afk_bucket_id} {silence}, and {why}.")
-    messagebox.showwarning(
+    aw_dialog.show_warning(
         "AW Watcher AFK Prompt: No AFK data",
         f"The AFK feed has stopped: {state.afk_bucket_id} {silence}, and {why}.\n\n"
         "AFK periods are found in that feed, so nothing will be asked about "
@@ -1113,7 +1113,7 @@ def main() -> None:
                     if down_duration >= 300 and not server_down_notified:
                         server_down_notified = True
                         logger.error(f"Server has been unreachable for {int(down_duration // 60)} minutes")
-                        messagebox.showwarning(
+                        aw_dialog.show_warning(
                             "AW Watcher AFK Prompt: Server Unreachable",
                             "The ActivityWatch server has been unreachable for over "
                             "5 minutes.\n\n"

@@ -242,3 +242,34 @@ class TestUnansweredTimeout:
 
         assert dialog._snoozing is True
         assert dialog.result is None
+
+
+class TestShowWarning:
+    """A warning box shown from the polling loop must leave the screen when closed.
+
+    tk_messageBox destroys its window on OK, but destroy() only queues the
+    removal; the watcher then goes back to sleeping between polls, so nothing
+    sends it to the display server. Observed: the "No AFK data" warning stayed
+    on screen, unresponsive, for ten minutes after it had been dismissed.
+    """
+
+    def test_flushes_after_the_box_closes(self, monkeypatch) -> None:
+        calls = []
+        monkeypatch.setattr(aw_dialog.messagebox, "showwarning", lambda *a, **kw: calls.append(("box", kw["parent"])))
+        monkeypatch.setattr(aw_dialog, "flush_closed_windows", lambda w: calls.append(("flush", w)))
+        aw_dialog.show_warning("title", "message")
+        # Same root for both: only the interpreter owning the box can flush it.
+        root = aw_dialog.get_root()
+        assert calls == [("box", root), ("flush", root)]
+
+    def test_flushes_even_when_the_box_fails(self, monkeypatch) -> None:
+        flushed = []
+
+        def broken(*_a, **_kw):
+            raise tk.TclError("display went away")
+
+        monkeypatch.setattr(aw_dialog.messagebox, "showwarning", broken)
+        monkeypatch.setattr(aw_dialog, "flush_closed_windows", flushed.append)
+        with pytest.raises(tk.TclError):
+            aw_dialog.show_warning("title", "message")
+        assert flushed == [aw_dialog.get_root()]
