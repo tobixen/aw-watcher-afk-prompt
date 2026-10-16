@@ -1122,7 +1122,7 @@ def main() -> None:
                         )
                 time.sleep(args.frequency)
     except Exception as e:
-        messagebox.showerror("AW Watcher Ask Away: Error", f"An unhandled exception occurred: {e}")
+        messagebox.showerror("AW Watcher AFK Prompt: Error", f"An unhandled exception occurred: {e}")
         raise
 
 
