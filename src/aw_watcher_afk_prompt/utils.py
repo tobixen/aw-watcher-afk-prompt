@@ -2,9 +2,22 @@
 
 import datetime
 import locale
+import logging
+import zoneinfo
 from datetime import timedelta
 
-LOCAL_TIMEZONE = datetime.datetime.now().astimezone().tzinfo
+import tzlocal
+
+logger = logging.getLogger(__name__)
+
+# A real zone, not the offset in force at startup: the watcher runs for weeks
+# and must follow the clocks when daylight saving time begins or ends.
+try:
+    LOCAL_TIMEZONE: datetime.tzinfo = tzlocal.get_localzone()
+except zoneinfo.ZoneInfoNotFoundError as e:
+    # A TZ like "UTC+2" or a POSIX rule string names no zone; fixed offset it is.
+    LOCAL_TIMEZONE = datetime.datetime.now().astimezone().tzinfo or datetime.UTC
+    logger.warning(f"Local timezone not found ({e}); times will not follow daylight saving time")
 
 # Age beyond which a prompted AFK period is considered "old" and gets a warning symbol.
 STALE_AGE_THRESHOLD = timedelta(minutes=15)

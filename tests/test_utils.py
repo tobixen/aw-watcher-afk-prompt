@@ -1,6 +1,12 @@
 """Tests for utils module."""
 
+import os
+import subprocess
+import sys
+import zoneinfo
 from datetime import UTC, datetime, timedelta, timezone
+
+import pytest
 
 from aw_watcher_afk_prompt.utils import (
     LOCAL_TIMEZONE,
@@ -10,6 +16,38 @@ from aw_watcher_afk_prompt.utils import (
     format_duration,
     format_time_local,
 )
+
+
+def _local_times(tz: str) -> list[str]:
+    """Local times of a summer and a winter instant, in a fresh process with TZ set."""
+    code = (
+        "from datetime import UTC, datetime\n"
+        "from aw_watcher_afk_prompt.utils import LOCAL_TIMEZONE\n"
+        "print(datetime(2026, 7, 1, 12, tzinfo=UTC).astimezone(LOCAL_TIMEZONE).strftime('%H:%M'))\n"
+        "print(datetime(2026, 11, 3, 18, 32, tzinfo=UTC).astimezone(LOCAL_TIMEZONE).strftime('%H:%M'))\n"
+    )
+    env = {**os.environ, "TZ": tz}
+    proc = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, check=False)
+    assert proc.returncode == 0, proc.stderr
+    return proc.stdout.split()
+
+
+def test_local_timezone_follows_daylight_saving_time() -> None:
+    """A long-running watcher must not keep the offset it was started with.
+
+    Started in summer time, it showed every time an hour late once the
+    clocks went back.
+    """
+    try:
+        zoneinfo.ZoneInfo("Europe/Oslo")
+    except zoneinfo.ZoneInfoNotFoundError:
+        pytest.skip("no tz database on this host")
+    assert _local_times("Europe/Oslo") == ["14:00", "19:32"]
+
+
+def test_local_timezone_survives_a_tz_without_a_zone_name() -> None:
+    """A TZ that names no zone falls back to the current offset rather than crashing."""
+    assert _local_times("UTC-3") == ["15:00", "21:32"]
 
 
 class TestFormatTimeLocal:

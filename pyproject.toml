@@ -26,7 +26,7 @@ classifiers = [
   "Topic :: Office/Business :: Scheduling",
   "Topic :: System :: Monitoring",
 ]
-dependencies = ["aw-client", "aw-core", "appdirs"]
+dependencies = ["aw-client", "aw-core", "appdirs", "tzlocal>=5"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "ruff>=0.4", "pre-commit>=3.0", "python-xlib"]

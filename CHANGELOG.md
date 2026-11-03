@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Times are no longer shown an hour off after the clocks change.** The watcher kept the UTC offset it was started with; it now follows daylight saving time (new dependency: `tzlocal`).
 - **The live "still AFK" dialog no longer counts its own period twice once you are back.** It showed "(1 of 2)" with the same absence offered as next, starting a minute or so later.
 - **The log no longer repeats the same "Advancing gap start" lines every few minutes** for periods still waiting for an answer.
 - **A brief touch while you are away no longer splits the absence.** The part before the touch could go unasked about, or be asked about twice.
