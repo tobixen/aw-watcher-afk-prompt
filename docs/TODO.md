@@ -89,6 +89,17 @@ This document tracks planned improvements, known issues, and future work for the
   - Make it configurable
   - Consider migration path
 
+### Split dialog: pending input
+- [ ] OK may lose hours still being typed
+  - A mouse click on OK causes no FocusOut, and `validate()` commits only
+    pending start times. Not yet tested with a real click.
+  - Fix: call `commit_pending_hours()` in `validate()` as "Distribute equally"
+    does, and report a rejected value the same way.
+- [ ] "+" and "−" silently drop a rejected start time
+  - `add_activity_line` and `remove_activity_line` ignore what
+    `commit_pending_starts()` returns, then redraw over the typed text.
+  - Fix: show the error and stop, as `distribute_equally` does.
+
 ### Split Feature Enhancements
 - [ ] Start times can't be typed back under a 12-hour locale
   - `format_time_local` shows e.g. "2:30 PM" where the locale prefers 12-hour
