@@ -326,6 +326,117 @@ class TestTimeCalculatorAdjustDuration:
             TimeCalculator.adjust_duration(activities, 5, 10)
 
 
+class TestTimeCalculatorDistributeEqual:
+    """Sharing the time not held by locked lines equally among the others."""
+
+    START = datetime(2025, 1, 15, 14, 0, 0, tzinfo=UTC)
+
+    def _chain(self, *minutes: int) -> list[ActivityLine]:
+        activities = []
+        current = self.START
+        for i, m in enumerate(minutes):
+            activities.append(ActivityLine(f"line{i}", current, m, 0))
+            current = activities[-1].end_time
+        return activities
+
+    def test_no_locks(self) -> None:
+        acts = self._chain(10, 20, 30)
+
+        result = TimeCalculator.distribute_equal(acts, self.START + timedelta(minutes=60))
+
+        assert [a.duration_minutes for a in result] == [20, 20, 20]
+        assert [a.description for a in result] == ["line0", "line1", "line2"]
+        assert result[-1].end_time == self.START + timedelta(minutes=60)
+
+    def test_locked_line_keeps_its_duration(self) -> None:
+        acts = self._chain(10, 5, 45)
+
+        result = TimeCalculator.distribute_equal(acts, self.START + timedelta(minutes=60), locked_indices={1})
+
+        assert [a.duration_minutes for a in result] == [27, 5, 27]
+        assert [a.duration_seconds for a in result] == [30, 0, 30]
+
+    def test_locked_line_keeps_its_seconds(self) -> None:
+        acts = [
+            ActivityLine("a", self.START, 10, 45),
+            ActivityLine("b", self.START + timedelta(minutes=10, seconds=45), 49, 15),
+            ActivityLine("c", self.START + timedelta(minutes=60), 30, 0),
+        ]
+
+        result = TimeCalculator.distribute_equal(acts, self.START + timedelta(minutes=90), locked_indices={0})
+
+        assert (result[0].duration_minutes, result[0].duration_seconds) == (10, 45)
+        assert result[-1].end_time == self.START + timedelta(minutes=90)
+
+    def test_start_times_follow_the_new_durations(self) -> None:
+        acts = self._chain(10, 20, 30)
+
+        result = TimeCalculator.distribute_equal(acts, self.START + timedelta(minutes=60), locked_indices={1})
+
+        assert result[0].start_time == self.START
+        assert result[1].start_time == result[0].end_time
+        assert result[2].start_time == result[1].end_time
+        assert result[2].end_time == self.START + timedelta(minutes=60)
+
+    def test_remainder_goes_to_the_last_unlocked_line(self) -> None:
+        """A remainder must not land on a locked last line, and the period must
+        still end where it did."""
+        acts = self._chain(10, 10, 10)
+        end = self.START + timedelta(minutes=30, seconds=1)
+
+        result = TimeCalculator.distribute_equal(acts, end)
+
+        assert [a.total_duration_seconds for a in result] == [600, 600, 601]
+        assert result[-1].end_time == end
+
+        result = TimeCalculator.distribute_equal(acts, end, locked_indices={2})
+
+        assert [a.total_duration_seconds for a in result] == [600, 601, 600]
+        assert result[-1].end_time == end
+
+    def test_single_unlocked_line_takes_all_the_free_time(self) -> None:
+        acts = self._chain(10, 20, 20)
+
+        result = TimeCalculator.distribute_equal(acts, self.START + timedelta(minutes=60), locked_indices={0, 1})
+
+        assert [a.duration_minutes for a in result] == [10, 20, 30]
+
+    def test_result_passes_validation(self) -> None:
+        acts = self._chain(7, 11, 13, 29)
+        end = self.START + timedelta(minutes=60)
+
+        result = TimeCalculator.distribute_equal(acts, end, locked_indices={1})
+
+        data = SplitActivityData(original_start=self.START, original_duration_seconds=3600, activities=result)
+        assert data.validate() == []
+
+    def test_input_is_not_mutated(self) -> None:
+        acts = self._chain(10, 50)
+
+        TimeCalculator.distribute_equal(acts, self.START + timedelta(minutes=60))
+
+        assert [a.duration_minutes for a in acts] == [10, 50]
+
+    def test_all_locked_raises(self) -> None:
+        acts = self._chain(10, 50)
+
+        with pytest.raises(ValueError, match="locked"):
+            TimeCalculator.distribute_equal(acts, self.START + timedelta(minutes=60), locked_indices={0, 1})
+
+    def test_less_than_a_minute_each_raises(self) -> None:
+        acts = self._chain(1, 1, 58)
+
+        result = TimeCalculator.distribute_equal(acts, self.START + timedelta(minutes=60), locked_indices={2})
+        assert [a.duration_minutes for a in result] == [1, 1, 58]
+
+        with pytest.raises(ValueError, match="at least 1 minute"):
+            TimeCalculator.distribute_equal(acts, self.START + timedelta(minutes=60, seconds=-1), locked_indices={2})
+
+    def test_empty_raises(self) -> None:
+        with pytest.raises(ValueError, match="empty"):
+            TimeCalculator.distribute_equal([], self.START)
+
+
 class TestTimeCalculatorAdjustStartTime:
     """Test TimeCalculator.adjust_start_time() method."""
 

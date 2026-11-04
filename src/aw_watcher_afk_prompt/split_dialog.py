@@ -413,6 +413,63 @@ class TimeCalculator:
         return new_activities
 
     @staticmethod
+    def distribute_equal(
+        activities: list[ActivityLine],
+        original_end: datetime,
+        locked_indices: set[int] | None = None,
+    ) -> list[ActivityLine]:
+        """Share the time not held by locked activities equally among the unlocked ones.
+
+        When the time doesn't divide evenly, the last unlocked activity absorbs
+        the leftover seconds.
+
+        Args:
+            activities: Current list of activities
+            original_end: End time of the original AFK period
+            locked_indices: Set of activity indices that must not be adjusted
+
+        Returns:
+            New list of activities with adjustments applied and start times recalculated
+
+        Raises:
+            ValueError: If activities is empty, all of them are locked, or an
+                unlocked activity would get less than 1 minute
+        """
+        if not activities:
+            raise ValueError("Cannot distribute time in an empty list")
+        if locked_indices is None:
+            locked_indices = set()
+
+        unlocked = [i for i in range(len(activities)) if i not in locked_indices]
+        if not unlocked:
+            raise ValueError("All activities are locked, nothing to distribute time to")
+
+        locked_seconds = sum(activities[i].total_duration_seconds for i in locked_indices)
+        free_seconds = int((original_end - activities[0].start_time).total_seconds() - locked_seconds)
+        share, leftover = divmod(free_seconds, len(unlocked))
+        if share < 60:
+            raise ValueError("Not enough time to give each unlocked activity at least 1 minute")
+
+        new_activities: list[ActivityLine] = []
+        current_start = activities[0].start_time
+        for i, activity in enumerate(activities):
+            if i in locked_indices:
+                seconds = activity.total_duration_seconds
+            else:
+                seconds = share + (leftover if i == unlocked[-1] else 0)
+            new_activities.append(
+                ActivityLine(
+                    description=activity.description,
+                    start_time=current_start,
+                    duration_minutes=int(seconds // 60),
+                    duration_seconds=int(seconds % 60),
+                )
+            )
+            current_start = new_activities[-1].end_time
+
+        return new_activities
+
+    @staticmethod
     def adjust_start_time(
         activities: list[ActivityLine], index: int, new_start: datetime, original_end: datetime | None = None
     ) -> list[ActivityLine]:
@@ -1034,6 +1091,8 @@ class SplitActivityDialog(simpledialog.Dialog):
         # Destroy add button if it exists
         if hasattr(self, "add_btn"):
             self.add_btn.destroy()
+        if hasattr(self, "distribute_btn"):
+            self.distribute_btn.destroy()
 
         # Create new widgets for each activity
         for i, activity in enumerate(self.activities):
@@ -1054,6 +1113,8 @@ class SplitActivityDialog(simpledialog.Dialog):
         add_row = self.first_activity_row + len(self.activities)
         self.add_btn = ttk.Button(self.master_frame, text="+", command=self.add_activity_line)
         self.add_btn.grid(row=add_row, column=0, padx=5, pady=5, sticky=tk.W)
+        self.distribute_btn = ttk.Button(self.master_frame, text="Distribute equally", command=self.distribute_equally)
+        self.distribute_btn.grid(row=add_row, column=1, columnspan=5, padx=5, pady=5, sticky=tk.W)
 
         self._setup_tab_order()
 
@@ -1215,6 +1276,18 @@ class SplitActivityDialog(simpledialog.Dialog):
                 rejected.append(typed)
         return rejected
 
+    def commit_pending_hours(self) -> list[str]:
+        """Commit hours still being typed; a button click causes no FocusOut.
+
+        Returns the typed values that were rejected.
+        """
+        rejected = []
+        for widget in self.activity_widgets:
+            typed = widget.hours_var.get()
+            if widget.hours_mode and not widget.commit_hours():
+                rejected.append(typed)
+        return rejected
+
     def add_activity_line(self):
         """Add a new activity line, preserving lock state of existing lines."""
         self.commit_pending_starts()
@@ -1256,6 +1329,21 @@ class SplitActivityDialog(simpledialog.Dialog):
             return
 
         self.redraw_activities(locked_states)
+
+    def distribute_equally(self):
+        """Share the time equally among the lines that aren't locked."""
+        rejected = self.commit_pending_starts() + self.commit_pending_hours()
+        if rejected:
+            tk.messagebox.showerror("Cannot Distribute Time", f"Invalid value: {rejected[0]}")
+            return
+        locked = {i for i, w in enumerate(self.activity_widgets) if w.is_locked()}
+        try:
+            self.activities = TimeCalculator.distribute_equal(self.activities, self.afk_end, locked_indices=locked)
+        except ValueError as e:
+            tk.messagebox.showerror("Cannot Distribute Time", str(e))
+            return
+        for i, (widget, activity) in enumerate(zip(self.activity_widgets, self.activities)):
+            widget.update_from_activity(activity, i == 0)
 
     def buttonbox(self):
         """Create OK and Cancel buttons."""

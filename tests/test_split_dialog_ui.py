@@ -95,6 +95,54 @@ class TestLockPreservation:
         assert dialog.activity_widgets[1].is_locked() is True
 
 
+class TestDistributeEqually:
+    def test_button_evens_out_the_unlocked_lines(self, root) -> None:
+        dialog = _make_dialog(root, num_activities=3, duration_minutes=60)
+        dialog.activity_widgets[0].duration_var.set(5)
+        dialog.activity_widgets[0].locked_var.set(True)
+        dialog.activity_widgets[1].duration_var.set(40)
+
+        dialog.distribute_btn.invoke()
+
+        assert [a.duration_minutes for a in dialog.activities] == [5, 27, 27]
+        assert [w.get_duration_minutes() for w in dialog.activity_widgets] == [5, 27, 27]
+        assert dialog.activity_widgets[0].is_locked() is True
+
+    def test_button_survives_a_redraw(self, root) -> None:
+        dialog = _make_dialog(root, num_activities=2, duration_minutes=60)
+
+        dialog.add_activity_line()
+        dialog.activity_widgets[0].duration_var.set(10)
+        dialog.distribute_btn.invoke()
+
+        assert [a.duration_minutes for a in dialog.activities] == [20, 20, 20]
+
+    def test_all_locked_says_so_and_changes_nothing(self, root, monkeypatch) -> None:
+        dialog = _make_dialog(root, num_activities=2, duration_minutes=60)
+        errors = []
+        monkeypatch.setattr(tk.messagebox, "showerror", lambda title, msg: errors.append(msg))
+        before = list(dialog.activities)
+        for widget in dialog.activity_widgets:
+            widget.locked_var.set(True)
+
+        dialog.distribute_btn.invoke()
+
+        assert dialog.activities == before
+        assert "locked" in errors[0]
+
+    def test_applies_a_start_time_still_being_typed(self, root) -> None:
+        """The typed 12:10 gives the locked first line 10 minutes, and only
+        then is the rest shared out."""
+        start = datetime(2026, 7, 6, 12, 0, tzinfo=LOCAL_TIMEZONE)
+        dialog = _make_dialog(root, num_activities=3, duration_minutes=60, start=start)
+        dialog.activity_widgets[0].locked_var.set(True)
+        dialog.activity_widgets[1].start_var.set("12:10")
+
+        dialog.distribute_btn.invoke()
+
+        assert [a.duration_minutes for a in dialog.activities] == [10, 25, 25]
+
+
 class TestStartTimeEditing:
     """Typing a start time (regression: every keystroke was applied, and the
     recalculation rewrote the field being typed in)."""
@@ -194,6 +242,63 @@ class TestStartTimeEditing:
         dialog.add_activity_line()
 
         assert dialog.activities[1].start_time == start + timedelta(minutes=40)
+
+
+class TestDistributeEquallyWithPendingInput:
+    def _errors(self, monkeypatch) -> list[str]:
+        errors: list[str] = []
+        monkeypatch.setattr(tk.messagebox, "showerror", lambda title, msg: errors.append(msg))
+        return errors
+
+    def test_applies_hours_still_being_typed_on_a_locked_line(self, root) -> None:
+        dialog = _make_dialog(root, num_activities=3, duration_minutes=60)
+        widget = dialog.activity_widgets[0]
+        widget._toggle_unit_mode()
+        widget.hours_var.set("0.5")
+        widget.locked_var.set(True)
+
+        dialog.distribute_btn.invoke()
+
+        assert [a.duration_minutes for a in dialog.activities] == [30, 15, 15]
+
+    def test_locked_line_in_hours_mode_keeps_its_exact_duration(self, root) -> None:
+        """20 minutes shows as 0.3 h, which must not end up as 18 minutes."""
+        dialog = _make_dialog(root, num_activities=3, duration_minutes=60)
+        widget = dialog.activity_widgets[0]
+        widget._toggle_unit_mode()
+        widget.locked_var.set(True)
+        dialog.activity_widgets[1].duration_var.set(30)
+
+        dialog.distribute_btn.invoke()
+
+        assert [a.duration_minutes for a in dialog.activities] == [20, 20, 20]
+
+    def test_invalid_hours_are_named_and_nothing_is_distributed(self, root, monkeypatch) -> None:
+        dialog = _make_dialog(root, num_activities=3, duration_minutes=60)
+        errors = self._errors(monkeypatch)
+        dialog.activity_widgets[1].duration_var.set(30)
+        before = list(dialog.activities)
+        widget = dialog.activity_widgets[0]
+        widget._toggle_unit_mode()
+        widget.hours_var.set("abc")
+
+        dialog.distribute_btn.invoke()
+
+        assert dialog.activities == before
+        assert "abc" in errors[0]
+
+    def test_invalid_start_time_is_named_and_kept(self, root, monkeypatch) -> None:
+        dialog = _make_dialog(root, num_activities=3, duration_minutes=60)
+        errors = self._errors(monkeypatch)
+        dialog.activity_widgets[0].duration_var.set(30)
+        before = list(dialog.activities)
+        dialog.activity_widgets[1].start_var.set("99:99")
+
+        dialog.distribute_btn.invoke()
+
+        assert dialog.activities == before
+        assert "99:99" in errors[0]
+        assert dialog.activity_widgets[1].start_var.get() == "99:99"
 
 
 class TestHoursMode:
