@@ -766,11 +766,12 @@ class ActivityLineWidget:
         self.duration_spinbox.grid(row=row, column=2, padx=5, pady=2)
 
         self.hours_var = tk.StringVar(master=parent, value="")
+        self._shown_hours = ""
         self.hours_entry = ttk.Entry(parent, textvariable=self.hours_var, width=6)
         self.hours_entry.grid(row=row, column=2, padx=5, pady=2)
         self.hours_entry.grid_remove()  # Hidden until user toggles to hours mode
-        self.hours_entry.bind("<Return>", lambda e: self._on_hours_commit())
-        self.hours_entry.bind("<FocusOut>", lambda e: self._on_hours_commit())
+        self.hours_entry.bind("<Return>", lambda e: self.commit_hours())
+        self.hours_entry.bind("<FocusOut>", lambda e: self.commit_hours())
 
         # Toggle button: "h" = switch to hours mode, "m" = switch to minutes mode
         self.mode_toggle_btn = ttk.Button(parent, text="h", width=2, command=self._toggle_unit_mode)
@@ -825,25 +826,37 @@ class ActivityLineWidget:
         except tk.TclError as e:
             logger.warning(f"Invalid duration value for activity {self.index}: {e}")
 
-    def _on_hours_commit(self):
-        """Parse hours entry and push the converted minutes to the activity pipeline."""
+    def commit_hours(self) -> bool:
+        """Parse hours entry and push the converted minutes to the activity pipeline.
+
+        Returns False if the typed value was rejected.
+        """
+        # What we put there ourselves is rounded to 0.1 h; writing that back
+        # would change the duration of a line nobody touched.
+        if self.hours_var.get() == self._shown_hours:
+            return True
         raw = self.hours_var.get().strip().rstrip("h").strip()
         try:
             hours = float(raw)
             minutes = round(hours * 60)
             if minutes >= 1:
-                self.on_change(field="duration", value=minutes)
-            else:
-                self._reset_hours_display()
+                return self.on_change(field="duration", value=minutes)
+            self._reset_hours_display()
         except ValueError:
             self._reset_hours_display()
+        return False
 
     def _reset_hours_display(self):
         """Restore hours entry to the current duration_var value."""
         try:
-            self.hours_var.set(_minutes_to_hours_str(self.duration_var.get()))
+            self._show_hours(self.duration_var.get())
         except tk.TclError:
             pass
+
+    def _show_hours(self, minutes: int):
+        """Put a duration in the hours entry."""
+        self._shown_hours = _minutes_to_hours_str(minutes)
+        self.hours_var.set(self._shown_hours)
 
     def _toggle_unit_mode(self):
         """Switch between minutes spinbox and decimal hours entry."""
@@ -852,7 +865,7 @@ class ActivityLineWidget:
                 current = self.duration_var.get()
             except tk.TclError:
                 current = 1
-            self.hours_var.set(_minutes_to_hours_str(current))
+            self._show_hours(current)
             self.duration_spinbox.grid_remove()
             self.duration_info_label.grid_remove()
             self.hours_entry.grid()
@@ -860,7 +873,7 @@ class ActivityLineWidget:
             self.hours_mode = True
             self.hours_entry.focus_set()
         else:
-            self._on_hours_commit()
+            self.commit_hours()
             self.hours_entry.grid_remove()
             self.duration_spinbox.grid()
             self.duration_info_label.grid()
@@ -916,7 +929,7 @@ class ActivityLineWidget:
         self.duration_var.set(activity.duration_minutes)
         self.duration_info_var.set(_format_duration_info(activity.duration_minutes))
         if self.hours_mode:
-            self.hours_var.set(_minutes_to_hours_str(activity.duration_minutes))
+            self._show_hours(activity.duration_minutes)
 
         # Re-add traces
         self.desc_var.trace_add("write", lambda *args: self._on_desc_change())

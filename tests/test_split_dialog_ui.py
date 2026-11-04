@@ -194,3 +194,38 @@ class TestStartTimeEditing:
         dialog.add_activity_line()
 
         assert dialog.activities[1].start_time == start + timedelta(minutes=40)
+
+
+class TestHoursMode:
+    def test_leaving_an_untouched_hours_field_changes_nothing(self, root) -> None:
+        """20 minutes shows as 0.3 h; that rounding must not be written back."""
+        dialog = _make_dialog(root, num_activities=3, duration_minutes=60)
+        widget = dialog.activity_widgets[0]
+
+        widget._toggle_unit_mode()
+        widget.commit_hours()
+        widget._toggle_unit_mode()
+
+        assert [a.duration_minutes for a in dialog.activities] == [20, 20, 20]
+
+    def test_typed_hours_are_applied(self, root) -> None:
+        dialog = _make_dialog(root, num_activities=3, duration_minutes=60)
+        widget = dialog.activity_widgets[0]
+
+        widget._toggle_unit_mode()
+        widget.hours_var.set("0.5")
+        widget.commit_hours()
+
+        assert dialog.activities[0].duration_minutes == 30
+
+    def test_refreshed_field_counts_as_untouched(self, root) -> None:
+        """A value another line's edit put in the field isn't typed input either."""
+        dialog = _make_dialog(root, num_activities=3, duration_minutes=60)
+        widget = dialog.activity_widgets[0]
+        widget._toggle_unit_mode()
+
+        dialog.activity_widgets[1].duration_var.set(25)
+        before = [a.duration_minutes for a in dialog.activities]
+        widget.commit_hours()
+
+        assert [a.duration_minutes for a in dialog.activities] == before

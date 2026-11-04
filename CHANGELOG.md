@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Switching a split line to hours and back no longer changes its duration.** The field shows hours rounded to one decimal, and that rounded value was written back even when nothing was typed, shifting time between the lines.
 - **Times are no longer shown an hour off after the clocks change.** The watcher kept the UTC offset it was started with; it now follows daylight saving time (new dependency: `tzlocal`).
 - **The live "still AFK" dialog no longer counts its own period twice once you are back.** It showed "(1 of 2)" with the same absence offered as next, starting a minute or so later.
 - **The log no longer repeats the same "Advancing gap start" lines every few minutes** for periods still waiting for an answer.
