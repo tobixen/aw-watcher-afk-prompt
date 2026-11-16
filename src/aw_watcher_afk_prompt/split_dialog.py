@@ -993,6 +993,71 @@ class ActivityLineWidget:
         self.duration_var.trace_add("write", lambda *args: self._on_duration_change())
 
 
+@dataclass
+class SplitDraft:
+    """What a split dialog that auto-snoozed held: its lines and their state."""
+
+    activities: list[ActivityLine]
+    locked: list[bool] = field(default_factory=list)
+    equal_distribution_mode: bool = False
+
+
+# Split dialogs that auto-snoozed, by the start of their AFK period, so the next
+# prompt for that period can bring the typing back. They last as long as the
+# watcher process; a restart loses them.
+_drafts: dict[datetime, SplitDraft] = {}
+
+# The same AFK period can come back with another start: the server returns
+# duplicated, millisecond-offset events, and once the period has ended its start
+# may be advanced past the idle countdown (cf. _COMPLETED_PERIOD_START_SLACK in
+# __main__).
+_DRAFT_EARLIER = timedelta(seconds=5)
+_DRAFT_LATER = timedelta(minutes=10)
+
+
+def _draft_key(afk_start: datetime | None) -> datetime | None:
+    """The key of the draft taken for this AFK period, if there is one."""
+    if afk_start is None:
+        return None
+    return next(
+        (
+            key
+            for key, draft in _drafts.items()
+            if key - _DRAFT_EARLIER <= afk_start <= key + _DRAFT_LATER and draft.activities[-1].end_time > afk_start
+        ),
+        None,
+    )
+
+
+def has_draft(afk_start: datetime | None) -> bool:
+    """Is there an auto-snoozed split waiting for this AFK period?"""
+    return _draft_key(afk_start) is not None
+
+
+def fit_draft(draft: list[ActivityLine], afk_start: datetime, afk_duration_seconds: float) -> list[ActivityLine]:
+    """Fit a draft's lines to the period as it is now.
+
+    The draft spans the period up to the moment Split was pressed; the period
+    itself ends where the user came back, and may start later (see
+    _DRAFT_LATER).  The first line takes the difference at the start, the last
+    line the one at the end.  If either drops under a minute, the time is shared
+    equally instead, keeping the descriptions.
+    """
+
+    totals = [a.total_duration_seconds for a in draft]
+    totals[0] -= (afk_start - draft[0].start_time).total_seconds()
+    totals[-1] += afk_duration_seconds - sum(totals)
+    if totals[0] >= 60 and totals[-1] >= 60:
+        lines = []
+        start = afk_start
+        for activity, total in zip(draft, totals, strict=True):
+            minutes, seconds = divmod(int(total), 60)
+            lines.append(ActivityLine(activity.description, start, minutes, seconds))
+            start = lines[-1].end_time
+        return lines
+    return TimeCalculator.split_equal(afk_start, afk_duration_seconds, len(draft), [a.description for a in draft])
+
+
 class SplitActivityDialog(simpledialog.Dialog):
     """Dialog for splitting an AFK period into multiple activities.
 
@@ -1004,7 +1069,15 @@ class SplitActivityDialog(simpledialog.Dialog):
     """
 
     def __init__(
-        self, parent, title: str, prompt: str, afk_start: datetime, afk_duration_seconds: float, history: list[str]
+        self,
+        parent,
+        title: str,
+        prompt: str,
+        afk_start: datetime,
+        afk_duration_seconds: float,
+        history: list[str],
+        timeout_ms: int | None = None,
+        draft: SplitDraft | None = None,
     ):
         """Initialize the split activity dialog.
 
@@ -1015,6 +1088,9 @@ class SplitActivityDialog(simpledialog.Dialog):
             afk_start: Start time of the AFK period
             afk_duration_seconds: Duration of the AFK period in seconds
             history: List of previous descriptions for abbreviation expansion
+            timeout_ms: Auto-snooze after this long without a key press or
+                click (None = never); ``timed_out`` then says it happened
+            draft: Lines to start with, fitted to this period, instead of two empty ones
         """
         self.prompt = prompt
         self.afk_start = afk_start
@@ -1022,9 +1098,17 @@ class SplitActivityDialog(simpledialog.Dialog):
         self.afk_end = afk_start + timedelta(seconds=afk_duration_seconds)
         self.history = history
 
-        # Initialize with 2 equal activities
-        self.activities = TimeCalculator.split_equal(afk_start, afk_duration_seconds, 2)
-        self.equal_distribution_mode = True  # Track if user has edited durations
+        if draft:
+            self.activities = draft.activities
+            self.equal_distribution_mode = draft.equal_distribution_mode
+            self._initial_locks = draft.locked
+        else:
+            self.activities = TimeCalculator.split_equal(afk_start, afk_duration_seconds, 2)
+            self.equal_distribution_mode = True  # Track if user has edited durations
+            self._initial_locks = None
+        self.timeout_ms = timeout_ms
+        self.timed_out = False
+        self._timeout_timer = None
 
         self.activity_widgets = []
         self.result = None  # Will be set to list of ActivityLine on OK, None on Cancel
@@ -1060,15 +1144,49 @@ class SplitActivityDialog(simpledialog.Dialog):
         self.first_activity_row = 2
 
         # Draw initial activity widgets
-        self.redraw_activities()
+        self.redraw_activities(getattr(self, "_initial_locks", None))
 
         # Configure column resizing
         self.master_frame.columnconfigure(0, weight=1)
+
+        # Auto-snooze if left alone, as the ordinary prompt does: an open split
+        # dialog holds the watcher's poll loop. Typing or clicking starts it over
+        # (not the few keys whose handlers return "break", such as Tab).
+        if self.timeout_ms:
+            self._arm_timeout()
+            self.bind("<KeyPress>", self._arm_timeout, add="+")
+            self.bind("<ButtonPress>", self._arm_timeout, add="+")
 
         # Focus on first description field
         if self.activity_widgets:
             return self.activity_widgets[0].desc_entry
         return None
+
+    def _arm_timeout(self, event=None) -> None:  # noqa: ARG002
+        """(Re)start the left-alone-for-too-long countdown."""
+        if self._timeout_timer is not None:
+            self.after_cancel(self._timeout_timer)
+        self._timeout_timer = self.after(self.timeout_ms, self._auto_snooze)
+
+    def _auto_snooze(self) -> None:
+        """Nobody touched the dialog in time: close it, keeping what was typed."""
+        self._timeout_timer = None
+        # Values still being typed have seen no FocusOut; a rejected one is lost.
+        self.commit_pending_starts()
+        self.commit_pending_hours()
+        self.draft = SplitDraft(
+            list(self.activities), [w.is_locked() for w in self.activity_widgets], self.equal_distribution_mode
+        )
+        self.timed_out = True
+        logger.info(f"Split dialog untouched for {self.timeout_ms // 1000}s — auto-snoozing, keeping the lines")
+        self.cancel()
+
+    def destroy(self):
+        """Disarm the countdown: it must not fire at a dialog that is gone."""
+        if getattr(self, "_timeout_timer", None) is not None:
+            self.after_cancel(self._timeout_timer)
+            self._timeout_timer = None
+        super().destroy()
 
     def redraw_activities(self, locked_states: list[bool] | None = None):
         """Redraw all activity line widgets.
@@ -1405,6 +1523,7 @@ def ask_split_activities(
     afk_duration_seconds: float,
     history: list[str],
     parent: tk.Misc | None = None,
+    timeout_ms: int | None = None,
 ) -> list[ActivityLine] | None | str:
     """Show split activity dialog and return list of activities, description, or None.
 
@@ -1415,6 +1534,9 @@ def ask_split_activities(
         afk_duration_seconds: Duration of the AFK period in seconds
         history: List of previous descriptions for abbreviation expansion
         parent: Parent tkinter widget (optional)
+        timeout_ms: Auto-snooze an untouched dialog after this long (None =
+            never).  The lines are kept as a draft that the next call for the
+            same AFK period opens with; any other way of closing drops it.
 
     Returns:
         - List of ActivityLine objects if OK clicked in split mode
@@ -1432,7 +1554,24 @@ def ask_split_activities(
         parent = own_root
 
     try:
-        dialog = SplitActivityDialog(parent, title, prompt, afk_start, afk_duration_seconds, history)
+        key = _draft_key(afk_start)
+        draft = _drafts.pop(key) if key is not None else None
+        if draft:
+            draft.activities = fit_draft(draft.activities, afk_start, afk_duration_seconds)
+        dialog = SplitActivityDialog(
+            parent,
+            title,
+            prompt,
+            afk_start,
+            afk_duration_seconds,
+            history,
+            timeout_ms=timeout_ms,
+            draft=draft,
+        )
+
+        if dialog.timed_out:
+            _drafts[afk_start] = dialog.draft
+            return None
 
         # Check if user removed activities down to 1 (return to single mode)
         if dialog.return_to_single_mode:

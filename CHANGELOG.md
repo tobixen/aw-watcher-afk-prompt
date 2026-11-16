@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A split dialog left open no longer stops all further prompts.** It now auto-snoozes after `prompt_timeout` minutes without typing or clicking, like the ordinary prompt. What was in it is kept: the next prompt for that period says a split is waiting, and **Split** brings back the lines, times and locks, fitted to the period's final length. They are kept in memory only, so restarting the watcher loses them.
 - **Switching a split line to hours and back no longer changes its duration.** The field shows hours rounded to one decimal, and that rounded value was written back even when nothing was typed, shifting time between the lines.
 - **Times are no longer shown an hour off after the clocks change.** The watcher kept the UTC offset it was started with; it now follows daylight saving time (new dependency: `tzlocal`).
 - **The live "still AFK" dialog no longer counts its own period twice once you are back.** It showed "(1 of 2)" with the same absence offered as next, starting a minute or so later.

@@ -148,7 +148,7 @@ I.e. if having an external keyboard it's possible to close the lid without being
 
 ### Split AFK Periods
 
-Quite often one ends up doing multiple tasks in my afk periods, for instance it could be "lunch" for 20 minutes and "phone call" for 10 minutes.  The pop-up dialog has a **Split** button for splitting the afk time on multiple event lines.  You can add as many lines as needed and then edit either the start time or the duration of the event lines.  Tick **Lock** on a line to keep its duration when other durations change; **Distribute equally** shares the rest of the time evenly among the lines that aren't locked.  Typing a start time still moves the time between that line and the one before it, locked or not.
+Quite often one ends up doing multiple tasks in my afk periods, for instance it could be "lunch" for 20 minutes and "phone call" for 10 minutes.  The pop-up dialog has a **Split** button for splitting the afk time on multiple event lines.  You can add as many lines as needed and then edit either the start time or the duration of the event lines.  Tick **Lock** on a line to keep its duration when other durations change; **Distribute equally** shares the rest of the time evenly among the lines that aren't locked.  Typing a start time still moves the time between that line and the one before it, locked or not.  Left alone for `prompt_timeout` minutes (no typing or clicking), the split dialog snoozes like the ordinary prompt; the next prompt for that period says so, and **Split** brings back the lines you had.
 
 ## Contributing
 

@@ -116,7 +116,7 @@ def test_ask_string_reuses_the_shared_root_for_the_split_dialog(monkeypatch) -> 
     """
     captured: dict[str, object] = {}
 
-    def fake_ask_split(title, prompt, afk_start, afk_duration_seconds, history, parent=None):  # noqa: ARG001
+    def fake_ask_split(title, prompt, afk_start, afk_duration_seconds, history, parent=None, **kw):  # noqa: ARG001
         captured["parent"] = parent
         return None
 

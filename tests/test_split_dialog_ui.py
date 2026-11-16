@@ -45,6 +45,9 @@ def _make_dialog(
     dialog.result = None
     dialog.return_to_single_mode = False
     dialog.single_mode_description = ""
+    dialog.timeout_ms = None
+    dialog.timed_out = False
+    dialog._timeout_timer = None
     dialog.body(root)
     return dialog
 

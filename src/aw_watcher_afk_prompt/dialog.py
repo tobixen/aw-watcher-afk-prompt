@@ -858,6 +858,21 @@ def ask_batch_edit(title: str, events: list, format_time_func) -> list[tuple] | 
     return d.result
 
 
+_DRAFT_NOTE = "\n\nA split you started for this period is waiting: press Split to continue it."
+
+
+def _with_draft_note(refresh):
+    """Keep the draft note on a prompt text the refresh callback replaces."""
+
+    def wrapped() -> dict:
+        update = refresh() or {}
+        if update.get("prompt"):
+            update = {**update, "prompt": f"{update['prompt']}{_DRAFT_NOTE}"}
+        return update
+
+    return wrapped
+
+
 def ask_string(
     title: str,
     prompt: str,
@@ -889,20 +904,28 @@ def ask_string(
         If split mode is activated, returns a special marker to indicate
         the calling code should use ask_split_activities instead.
     """
+    # Imported here rather than at module level: this module is imported for its
+    # dialogs long before anyone presses Split.
+    from aw_watcher_afk_prompt import split_dialog
+
     try:
         # Loop to handle switching between single and split modes
         initial_text = initial_value
+        # A split that auto-snoozed is announced here, rather than reopened by
+        # itself: this prompt is the one that knows the queue, refreshes, and
+        # doesn't count down while the user is away. Split brings the lines back.
         while True:
+            has_draft = split_dialog.has_draft(afk_start)
             d = AWAfkPromptDialog(
                 title,
-                prompt,
+                f"{prompt}{_DRAFT_NOTE}" if has_draft else prompt,
                 history,
                 afk_start,
                 afk_duration_seconds,
                 queue_info=queue_info,
                 is_ongoing=is_ongoing,
                 still_afk_check=still_afk_check,
-                refresh=refresh,
+                refresh=_with_draft_note(refresh) if has_draft and refresh is not None else refresh,
                 timeout_ms=timeout_ms,
             )
 
@@ -917,19 +940,15 @@ def ask_string(
 
             # Check if user clicked Split button
             if d.split_mode:
-                # Imported here rather than at module level: this module is imported
-                # for its dialogs long before anyone presses Split.
-                from aw_watcher_afk_prompt.split_dialog import ask_split_activities
-
                 # Show split dialog. Use the dialog's duration, which switch_to_split_mode
                 # snapshots to start..now for ongoing periods (passed-in value is None there).
-                result = ask_split_activities(
-                    title, prompt, afk_start, d.afk_duration_seconds, history, parent=get_root()
+                result = split_dialog.ask_split_activities(
+                    title, prompt, afk_start, d.afk_duration_seconds, history, parent=get_root(), timeout_ms=timeout_ms
                 )
 
                 # Check what the split dialog returned
                 if result is None:
-                    return None  # Cancelled in split mode
+                    return None  # Cancelled or auto-snoozed in split mode
                 elif isinstance(result, str):
                     # User removed activities down to 1 - return to single mode
                     logger.info(f"Returning to single mode with description: '{result}'")

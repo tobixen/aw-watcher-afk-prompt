@@ -48,17 +48,6 @@ This document tracks planned improvements, known issues, and future work for the
     (core.py) copies its `_get`/`_post`/`_delete` to add one
   - aw-client is unpinned, so if those methods change upstream the copy quietly
     diverges
-- [ ] An unanswered split dialog blocks the watcher indefinitely
-      (split_dialog.py, no `after(` anywhere in it)
-  - The ordinary prompt auto-snoozes after `timeout_ms` and comes back later
-    (dialog.py:481-494), but pressing Split cancels those timers
-    (dialog.py:698) and the split dialog arms none of its own. A split left
-    open therefore holds the poll loop for as long as it sits there — observed
-    2026-09-05: 15:56 to 17:29, no prompts, no snooze.
-  - Fix: thread `timeout_ms` through `ask_string` → `ask_split_activities` →
-    `SplitActivityDialog` and arm the same countdown. Needs a decision first on
-    what an auto-snooze does with half-typed activity lines: dropping the
-    user's typing silently is worse than the block it prevents.
 - [ ] Start time is validated and committed on every keystroke
       (split_dialog.py:743, :910 → `_on_start_change`)
   - The `trace_add("write", …)` callback runs per keystroke, so each partially
