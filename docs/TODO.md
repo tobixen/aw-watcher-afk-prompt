@@ -48,20 +48,10 @@ This document tracks planned improvements, known issues, and future work for the
     (core.py) copies its `_get`/`_post`/`_delete` to add one
   - aw-client is unpinned, so if those methods change upstream the copy quietly
     diverges
-- [ ] Start time is validated and committed on every keystroke
-      (split_dialog.py:743, :910 → `_on_start_change`)
-  - The `trace_add("write", …)` callback runs per keystroke, so each partially
-    typed value is parsed. The ones that fail log at WARNING (:1122, :1129,
-    :1161, :1164) — typing `22:00` into an empty field gives three, and a
-    backspaced-then-retyped `01:03` gives eight, which is where the observed
-    `Invalid start time format: 0103`, `003`, `03` came from.
-  - Worse than the log noise: a partial value that *parses* is committed.
-    Typing `22:0` on the way to `22:05` reaches `adjust_start_time` (:1144),
-    redistributes every duration, and rewrites the entry text through
-    `update_from_activity` (:1158, :883) while the user is still typing. So the
-    fix is to validate on commit (Return/focus-out), not to lower the log level.
-  - The duration field has the same shape: `_on_duration_change` per keystroke,
-    warning at :809 whenever the `IntVar` holds a partial or empty value.
+- [x] Start time and duration are applied on commit, not per keystroke
+  - A half-typed value was parsed, logged at WARNING when it failed and
+    applied when it parsed, rewriting the fields while they were typed in.
+    Now applied on Enter, Tab, focus-out, OK and before lines are redrawn.
 - [x] Wrap Entry widget for reuse across dialogs (dialog.py:215)
   - Created EnhancedEntry widget in widgets.py with keyboard shortcuts
   - Used in AWAskAwayDialog, BatchEditDialog, and split_dialog.py
@@ -79,14 +69,10 @@ This document tracks planned improvements, known issues, and future work for the
   - Consider migration path
 
 ### Split dialog: pending input
-- [ ] OK may lose hours still being typed
-  - A mouse click on OK causes no FocusOut, and `validate()` commits only
-    pending start times. Not yet tested with a real click.
-  - Fix: call `commit_pending_hours()` in `validate()` as "Distribute equally"
-    does, and report a rejected value the same way.
-- [ ] "+" and "−" silently drop a rejected start time
+- [ ] "+" and "−" silently drop a rejected start time or duration
   - `add_activity_line` and `remove_activity_line` ignore what
-    `commit_pending_starts()` returns, then redraw over the typed text.
+    `commit_pending_starts()` and `commit_pending_durations()` return, then
+    redraw over the typed text.
   - Fix: show the error and stop, as `distribute_equally` does.
 
 ### Split Feature Enhancements

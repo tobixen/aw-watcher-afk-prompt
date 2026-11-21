@@ -8,8 +8,10 @@ The dialog is built via __new__ + body() so the modal wait_window() machinery
 of simpledialog.Dialog is bypassed.
 """
 
+import logging
 import tkinter as tk
 from datetime import UTC, datetime, timedelta
+from tkinter import ttk
 
 import pytest
 
@@ -101,9 +103,11 @@ class TestLockPreservation:
 class TestDistributeEqually:
     def test_button_evens_out_the_unlocked_lines(self, root) -> None:
         dialog = _make_dialog(root, num_activities=3, duration_minutes=60)
-        dialog.activity_widgets[0].duration_var.set(5)
+        _type_minutes(dialog.activity_widgets[0], "5")
+        dialog.activity_widgets[0].commit_minutes()
         dialog.activity_widgets[0].locked_var.set(True)
-        dialog.activity_widgets[1].duration_var.set(40)
+        _type_minutes(dialog.activity_widgets[1], "40")
+        dialog.activity_widgets[1].commit_minutes()
 
         dialog.distribute_btn.invoke()
 
@@ -115,7 +119,8 @@ class TestDistributeEqually:
         dialog = _make_dialog(root, num_activities=2, duration_minutes=60)
 
         dialog.add_activity_line()
-        dialog.activity_widgets[0].duration_var.set(10)
+        _type_minutes(dialog.activity_widgets[0], "10")
+        dialog.activity_widgets[0].commit_minutes()
         dialog.distribute_btn.invoke()
 
         assert [a.duration_minutes for a in dialog.activities] == [20, 20, 20]
@@ -247,6 +252,237 @@ class TestStartTimeEditing:
         assert dialog.activities[1].start_time == start + timedelta(minutes=40)
 
 
+def _type_minutes(widget, text: str) -> None:
+    """Type into a minutes field one keystroke at a time, from empty."""
+    widget.duration_spinbox.delete(0, tk.END)
+    for char in text:
+        widget.duration_spinbox.insert(tk.END, char)
+
+
+class TestMinutesEditing:
+    """Typing a duration in minutes (regression: every keystroke was applied,
+    so typing 45 first gave the line 4 minutes, and clearing the field logged
+    a warning)."""
+
+    def test_typing_is_not_applied_before_commit(self, root, caplog) -> None:
+        dialog = _make_dialog(root, num_activities=3, duration_minutes=60)
+        before = list(dialog.activities)
+        widget = dialog.activity_widgets[0]
+
+        with caplog.at_level(logging.WARNING):
+            _type_minutes(widget, "45")
+
+        assert dialog.activities == before
+        assert widget.duration_spinbox.get() == "45"
+        assert caplog.records == []
+
+    def test_commit_applies_typed_minutes(self, root) -> None:
+        dialog = _make_dialog(root, num_activities=3, duration_minutes=60)
+        widget = dialog.activity_widgets[0]
+
+        _type_minutes(widget, "40")
+        assert widget.commit_minutes() is True
+
+        assert [a.duration_minutes for a in dialog.activities] == [40, 10, 10]
+        assert widget.duration_info_var.get() == ""
+
+    @pytest.mark.parametrize("typed", ["", "abc", "0", "-5", "4.5", "\u00b2"])
+    def test_invalid_minutes_are_reverted_on_commit(self, root, typed) -> None:
+        dialog = _make_dialog(root, num_activities=3, duration_minutes=60)
+        before = list(dialog.activities)
+        widget = dialog.activity_widgets[0]
+
+        _type_minutes(widget, typed)
+        assert widget.commit_minutes() is False
+
+        assert dialog.activities == before
+        assert widget.duration_spinbox.get() == "20"
+
+    def test_enter_commits(self, root) -> None:
+        dialog = _make_dialog(root, num_activities=3, duration_minutes=60)
+        widget = dialog.activity_widgets[0]
+
+        _type_minutes(widget, "30")
+        root.deiconify()
+        widget.duration_spinbox.focus_force()
+        root.update()
+        widget.duration_spinbox.event_generate("<Return>")
+
+        assert dialog.activities[0].duration_minutes == 30
+
+    def test_enter_does_not_reach_ok(self, root) -> None:
+        """Enter only commits; reaching OK as well would close the dialog
+        over a value it just rejected."""
+        dialog = _make_dialog(root, num_activities=3, duration_minutes=60)
+        ok_pressed = []
+        root.bind("<Return>", lambda e: ok_pressed.append(True))
+        widget = dialog.activity_widgets[0]
+
+        _type_minutes(widget, "abc")
+        root.deiconify()
+        widget.duration_spinbox.focus_force()
+        root.update()
+        widget.duration_spinbox.event_generate("<Return>")
+
+        assert ok_pressed == []
+
+    def test_stepping_another_line_keeps_minutes_being_typed(self, root) -> None:
+        dialog = _make_dialog(root, num_activities=3, duration_minutes=60)
+        widget = dialog.activity_widgets[0]
+        _type_minutes(widget, "30")
+
+        dialog.activity_widgets[1].duration_spinbox.event_generate("<<Increment>>")
+
+        assert widget.duration_spinbox.get() == "30"
+        widget.commit_minutes()
+        assert dialog.activities[0].duration_minutes == 30
+        assert sum(a.duration_minutes for a in dialog.activities) == 60
+
+    def test_ok_applies_minutes_typed_on_several_lines(self, root) -> None:
+        dialog = _make_dialog(root, num_activities=3, duration_minutes=60)
+        _type_minutes(dialog.activity_widgets[0], "30")
+        _type_minutes(dialog.activity_widgets[1], "25")
+
+        assert dialog.validate() is True
+
+        # Each is applied in turn, like typing one and then the other; the
+        # second spreads its change over the unlocked lines.
+        assert dialog.activities[1].duration_minutes == 25
+        assert dialog.activities[0].duration_minutes != 20
+        assert sum(a.duration_minutes for a in dialog.activities) == 60
+
+    def test_arrow_step_is_applied_at_once(self, root) -> None:
+        dialog = _make_dialog(root, num_activities=3, duration_minutes=60)
+        widget = dialog.activity_widgets[0]
+
+        widget.duration_spinbox.event_generate("<<Increment>>")
+
+        assert dialog.activities[0].duration_minutes == 21
+        assert sum(a.duration_minutes for a in dialog.activities) == 60
+
+    def test_untouched_field_after_another_lines_edit_changes_nothing(self, root) -> None:
+        dialog = _make_dialog(root, num_activities=3, duration_minutes=60)
+        _type_minutes(dialog.activity_widgets[1], "30")
+        dialog.activity_widgets[1].commit_minutes()
+        before = list(dialog.activities)
+
+        assert dialog.activity_widgets[0].commit_minutes() is True
+
+        assert dialog.activities == before
+
+    def test_ok_applies_minutes_still_being_typed(self, root) -> None:
+        dialog = _make_dialog(root, num_activities=3, duration_minutes=60)
+        _type_minutes(dialog.activity_widgets[0], "30")
+
+        assert dialog.validate() is True
+
+        assert [a.duration_minutes for a in dialog.activities] == [30, 15, 15]
+
+    def test_ok_with_invalid_minutes_names_them_and_keeps_them(self, root, monkeypatch) -> None:
+        dialog = _make_dialog(root, num_activities=3, duration_minutes=60)
+        errors: list[str] = []
+        monkeypatch.setattr(tk.messagebox, "showerror", lambda title, msg: errors.append(msg))
+        widget = dialog.activity_widgets[0]
+
+        _type_minutes(widget, "abc")
+
+        assert dialog.validate() is False
+        assert "abc" in errors[0]
+        assert widget.duration_spinbox.get() == "abc"
+
+    def test_ok_applies_hours_still_being_typed(self, root) -> None:
+        """A click on OK causes no FocusOut in the hours field either."""
+        dialog = _make_dialog(root, num_activities=3, duration_minutes=60)
+        widget = dialog.activity_widgets[0]
+        widget._toggle_unit_mode()
+        widget.hours_var.set("0.5")
+
+        assert dialog.validate() is True
+
+        assert [a.duration_minutes for a in dialog.activities] == [30, 15, 15]
+
+    def test_adding_a_line_keeps_minutes_still_being_typed(self, root) -> None:
+        dialog = _make_dialog(root, num_activities=2, duration_minutes=60)
+        dialog.activity_widgets[0].locked_var.set(True)
+        _type_minutes(dialog.activity_widgets[0], "40")
+
+        dialog.add_activity_line()
+
+        assert dialog.activities[0].duration_minutes == 40
+
+    def test_switching_to_hours_applies_typed_minutes(self, root) -> None:
+        dialog = _make_dialog(root, num_activities=3, duration_minutes=60)
+        widget = dialog.activity_widgets[0]
+        _type_minutes(widget, "30")
+
+        widget._toggle_unit_mode()
+
+        assert dialog.activities[0].duration_minutes == 30
+        assert widget.hours_var.get() == "0.5"
+
+
+class TestClickOnAButton:
+    """A click on a ttk button takes the focus on press, before its command
+    runs, so the field being typed in sees a FocusOut first.  That must not
+    quietly put the old value back and let OK pass."""
+
+    def _click_away(self, root, dialog, entry) -> None:
+        button = ttk.Button(dialog.master_frame, text="OK")
+        button.grid(row=99, column=0)
+        root.deiconify()
+        entry.focus_force()
+        root.update()
+        button.event_generate("<ButtonPress-1>", x=2, y=2)
+        root.update()
+
+    def test_invalid_minutes_are_named_at_ok(self, root, monkeypatch) -> None:
+        dialog = _make_dialog(root, num_activities=3, duration_minutes=60)
+        errors: list[str] = []
+        monkeypatch.setattr(tk.messagebox, "showerror", lambda title, msg: errors.append(msg))
+        widget = dialog.activity_widgets[0]
+        _type_minutes(widget, "abc")
+
+        self._click_away(root, dialog, widget.duration_spinbox)
+
+        assert dialog.validate() is False
+        assert "abc" in errors[0]
+        assert widget.duration_spinbox.get() == "abc"
+
+    def test_invalid_hours_are_named_at_ok(self, root, monkeypatch) -> None:
+        dialog = _make_dialog(root, num_activities=3, duration_minutes=60)
+        errors: list[str] = []
+        monkeypatch.setattr(tk.messagebox, "showerror", lambda title, msg: errors.append(msg))
+        widget = dialog.activity_widgets[0]
+        widget._toggle_unit_mode()
+        widget.hours_var.set("abc")
+
+        self._click_away(root, dialog, widget.hours_entry)
+
+        assert dialog.validate() is False
+        assert "abc" in errors[0]
+
+    def test_invalid_start_time_is_named_at_ok(self, root, monkeypatch) -> None:
+        dialog = _make_dialog(root, num_activities=3, duration_minutes=60)
+        errors: list[str] = []
+        monkeypatch.setattr(tk.messagebox, "showerror", lambda title, msg: errors.append(msg))
+        widget = dialog.activity_widgets[1]
+        widget.start_var.set("99:99")
+
+        self._click_away(root, dialog, widget.start_entry)
+
+        assert dialog.validate() is False
+        assert "99:99" in errors[0]
+
+    def test_valid_minutes_are_applied(self, root) -> None:
+        dialog = _make_dialog(root, num_activities=3, duration_minutes=60)
+        widget = dialog.activity_widgets[0]
+        _type_minutes(widget, "30")
+
+        self._click_away(root, dialog, widget.duration_spinbox)
+
+        assert dialog.activities[0].duration_minutes == 30
+
+
 class TestDistributeEquallyWithPendingInput:
     def _errors(self, monkeypatch) -> list[str]:
         errors: list[str] = []
@@ -270,7 +506,8 @@ class TestDistributeEquallyWithPendingInput:
         widget = dialog.activity_widgets[0]
         widget._toggle_unit_mode()
         widget.locked_var.set(True)
-        dialog.activity_widgets[1].duration_var.set(30)
+        _type_minutes(dialog.activity_widgets[1], "30")
+        dialog.activity_widgets[1].commit_minutes()
 
         dialog.distribute_btn.invoke()
 
@@ -279,7 +516,8 @@ class TestDistributeEquallyWithPendingInput:
     def test_invalid_hours_are_named_and_nothing_is_distributed(self, root, monkeypatch) -> None:
         dialog = _make_dialog(root, num_activities=3, duration_minutes=60)
         errors = self._errors(monkeypatch)
-        dialog.activity_widgets[1].duration_var.set(30)
+        _type_minutes(dialog.activity_widgets[1], "30")
+        dialog.activity_widgets[1].commit_minutes()
         before = list(dialog.activities)
         widget = dialog.activity_widgets[0]
         widget._toggle_unit_mode()
@@ -293,7 +531,8 @@ class TestDistributeEquallyWithPendingInput:
     def test_invalid_start_time_is_named_and_kept(self, root, monkeypatch) -> None:
         dialog = _make_dialog(root, num_activities=3, duration_minutes=60)
         errors = self._errors(monkeypatch)
-        dialog.activity_widgets[0].duration_var.set(30)
+        _type_minutes(dialog.activity_widgets[0], "30")
+        dialog.activity_widgets[0].commit_minutes()
         before = list(dialog.activities)
         dialog.activity_widgets[1].start_var.set("99:99")
 
@@ -332,7 +571,8 @@ class TestHoursMode:
         widget = dialog.activity_widgets[0]
         widget._toggle_unit_mode()
 
-        dialog.activity_widgets[1].duration_var.set(25)
+        _type_minutes(dialog.activity_widgets[1], "25")
+        dialog.activity_widgets[1].commit_minutes()
         before = [a.duration_minutes for a in dialog.activities]
         widget.commit_hours()
 

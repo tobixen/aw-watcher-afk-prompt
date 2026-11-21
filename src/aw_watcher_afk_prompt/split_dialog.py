@@ -809,26 +809,36 @@ class ActivityLineWidget:
         # Applied on commit, not per keystroke: a half-typed time like "00:3"
         # is valid, and recalculating rewrote the field while it was typed in.
         # Enter here only commits; "break" keeps it from also pressing OK.
+        # FocusOut leaves a rejected value in place: a click on OK takes the
+        # focus before OK runs, and OK must get to name it.
         if not is_first:
             self.start_entry.bind("<Return>", lambda e: (self.commit_start(), "break")[1])
-            self.start_entry.bind("<FocusOut>", lambda e: self.commit_start())
+            self.start_entry.bind("<FocusOut>", lambda e: self.commit_start(revert=False))
 
         self.hours_mode = False
+        self._committing = False
 
         # Duration input — minutes spinbox (default) or hours entry (toggled)
         # Both share column 2; only one is visible at a time.
+        # Typed minutes are applied on commit, like the start time: typing 45
+        # would otherwise give the line 4 minutes first.  An arrow step is a
+        # whole value and is applied at once.
         self.duration_var = tk.IntVar(master=parent, value=activity.duration_minutes)
-        self.duration_var.trace_add("write", lambda *args: self._on_duration_change())
-        self.duration_spinbox = ttk.Spinbox(parent, from_=1, to=9999, width=6, textvariable=self.duration_var)
+        self._shown_minutes = str(activity.duration_minutes)
+        self.duration_spinbox = ttk.Spinbox(
+            parent, from_=1, to=9999, width=6, textvariable=self.duration_var, command=self.commit_minutes
+        )
         self.duration_spinbox.grid(row=row, column=2, padx=5, pady=2)
+        self.duration_spinbox.bind("<Return>", lambda e: (self.commit_minutes(), "break")[1])
+        self.duration_spinbox.bind("<FocusOut>", lambda e: self.commit_minutes(revert=False))
 
         self.hours_var = tk.StringVar(master=parent, value="")
         self._shown_hours = ""
         self.hours_entry = ttk.Entry(parent, textvariable=self.hours_var, width=6)
         self.hours_entry.grid(row=row, column=2, padx=5, pady=2)
         self.hours_entry.grid_remove()  # Hidden until user toggles to hours mode
-        self.hours_entry.bind("<Return>", lambda e: self.commit_hours())
-        self.hours_entry.bind("<FocusOut>", lambda e: self.commit_hours())
+        self.hours_entry.bind("<Return>", lambda e: (self.commit_hours(), "break")[1])
+        self.hours_entry.bind("<FocusOut>", lambda e: self.commit_hours(revert=False))
 
         # Toggle button: "h" = switch to hours mode, "m" = switch to minutes mode
         self.mode_toggle_btn = ttk.Button(parent, text="h", width=2, command=self._toggle_unit_mode)
@@ -873,18 +883,49 @@ class ActivityLineWidget:
             self.start_var.set(self._shown_start)
         return False
 
-    def _on_duration_change(self):
-        """Handle duration change."""
-        try:
-            duration = self.duration_var.get()
-            self.duration_info_var.set(_format_duration_info(duration))
-            logger.debug(f"Activity {self.index} duration changed to: {duration}")
-            self.on_change(field="duration", value=duration)
-        except tk.TclError as e:
-            logger.warning(f"Invalid duration value for activity {self.index}: {e}")
+    def commit_minutes(self, revert: bool = True) -> bool:
+        """Apply typed minutes.
 
-    def commit_hours(self) -> bool:
+        Args:
+            revert: Put the shown duration back if the typed one is rejected
+
+        Returns False if the typed value was rejected.
+        """
+        typed = self.duration_spinbox.get().strip()
+        if typed == self._shown_minutes:
+            return True
+        logger.debug(f"Activity {self.index} duration committed: '{typed}'")
+        if typed.isdecimal() and int(typed) >= 1 and self._apply_duration(int(typed)):
+            return True
+        if revert:
+            self._show_minutes(self._shown_minutes)
+        return False
+
+    def _apply_duration(self, minutes: int) -> bool:
+        """Push a committed duration to the dialog; this line's fields follow the result."""
+        self._committing = True
+        try:
+            return self.on_change(field="duration", value=minutes)
+        finally:
+            self._committing = False
+
+    def has_pending_duration(self) -> bool:
+        """True if the visible duration field holds typed text not yet applied."""
+        if self.hours_mode:
+            return self.hours_var.get() != self._shown_hours
+        return self.duration_spinbox.get().strip() != self._shown_minutes
+
+    def _show_minutes(self, minutes: int | str):
+        """Put a duration in the minutes spinbox."""
+        self._shown_minutes = str(minutes)
+        self.duration_var.set(minutes)
+        self.duration_info_var.set(_format_duration_info(int(minutes)))
+
+    def commit_hours(self, revert: bool = True) -> bool:
         """Parse hours entry and push the converted minutes to the activity pipeline.
+
+        Args:
+            revert: Put the shown duration back if the typed one is rejected
 
         Returns False if the typed value was rejected.
         """
@@ -894,21 +935,18 @@ class ActivityLineWidget:
             return True
         raw = self.hours_var.get().strip().rstrip("h").strip()
         try:
-            hours = float(raw)
-            minutes = round(hours * 60)
-            if minutes >= 1:
-                return self.on_change(field="duration", value=minutes)
-            self._reset_hours_display()
+            minutes = round(float(raw) * 60)
         except ValueError:
+            minutes = 0
+        if minutes >= 1 and self._apply_duration(minutes):
+            return True
+        if revert:
             self._reset_hours_display()
         return False
 
     def _reset_hours_display(self):
-        """Restore hours entry to the current duration_var value."""
-        try:
-            self._show_hours(self.duration_var.get())
-        except tk.TclError:
-            pass
+        """Restore hours entry to the current duration."""
+        self._show_hours(int(self._shown_minutes))
 
     def _show_hours(self, minutes: int):
         """Put a duration in the hours entry."""
@@ -918,11 +956,8 @@ class ActivityLineWidget:
     def _toggle_unit_mode(self):
         """Switch between minutes spinbox and decimal hours entry."""
         if not self.hours_mode:
-            try:
-                current = self.duration_var.get()
-            except tk.TclError:
-                current = 1
-            self._show_hours(current)
+            self.commit_minutes()
+            self._show_hours(int(self._shown_minutes))
             self.duration_spinbox.grid_remove()
             self.duration_info_label.grid_remove()
             self.hours_entry.grid()
@@ -961,36 +996,36 @@ class ActivityLineWidget:
         return self.start_var.get()
 
     def get_duration_minutes(self) -> int:
-        """Get the current duration in minutes."""
-        try:
-            return self.duration_var.get()
-        except tk.TclError:
-            return 1  # Default to 1 if invalid
+        """Get the current (committed) duration in minutes."""
+        return int(self._shown_minutes)
 
     def update_from_activity(self, activity: ActivityLine, is_first: bool):
         """Update widget values from an ActivityLine without triggering callbacks."""
-        # Temporarily remove traces to avoid triggering callbacks
+        # Temporarily remove the trace to avoid triggering callbacks
         desc_trace_id = self.desc_var.trace_info()[0][1] if self.desc_var.trace_info() else None
-        duration_trace_id = self.duration_var.trace_info()[0][1] if self.duration_var.trace_info() else None
 
         if desc_trace_id:
             self.desc_var.trace_remove("write", desc_trace_id)
-        if duration_trace_id:
-            self.duration_var.trace_remove("write", duration_trace_id)
 
         # Update values
         self.desc_var.set(activity.description)
         start_str = format_time_local(activity.start_time, include_seconds=is_first)
         self.start_var.set(start_str)
         self._shown_start = start_str
-        self.duration_var.set(activity.duration_minutes)
-        self.duration_info_var.set(_format_duration_info(activity.duration_minutes))
-        if self.hours_mode:
+        # Another line's change must not wipe a duration still being typed
+        # here: keep the text, so it is applied when this field is committed.
+        keep_typed = self.has_pending_duration() and not self._committing
+        typed_minutes = self.duration_spinbox.get()
+        self._show_minutes(activity.duration_minutes)
+        if keep_typed and not self.hours_mode:
+            self.duration_var.set(typed_minutes)
+        if keep_typed and self.hours_mode:
+            self._shown_hours = _minutes_to_hours_str(activity.duration_minutes)
+        elif self.hours_mode:
             self._show_hours(activity.duration_minutes)
 
-        # Re-add traces
+        # Re-add the trace
         self.desc_var.trace_add("write", lambda *args: self._on_desc_change())
-        self.duration_var.trace_add("write", lambda *args: self._on_duration_change())
 
 
 @dataclass
@@ -1173,7 +1208,7 @@ class SplitActivityDialog(simpledialog.Dialog):
         self._timeout_timer = None
         # Values still being typed have seen no FocusOut; a rejected one is lost.
         self.commit_pending_starts()
-        self.commit_pending_hours()
+        self.commit_pending_durations()
         self.draft = SplitDraft(
             list(self.activities), [w.is_locked() for w in self.activity_widgets], self.equal_distribution_mode
         )
@@ -1394,21 +1429,27 @@ class SplitActivityDialog(simpledialog.Dialog):
                 rejected.append(typed)
         return rejected
 
-    def commit_pending_hours(self) -> list[str]:
-        """Commit hours still being typed; a button click causes no FocusOut.
+    def commit_pending_durations(self) -> list[str]:
+        """Commit durations still being typed, before anything redraws or reads them.
 
-        Returns the typed values that were rejected.
+        Returns the typed values that were rejected (and left in place).
         """
         rejected = []
         for widget in self.activity_widgets:
-            typed = widget.hours_var.get()
-            if widget.hours_mode and not widget.commit_hours():
+            if widget.hours_mode:
+                typed = widget.hours_var.get()
+                ok = widget.commit_hours()
+            else:
+                typed = widget.duration_spinbox.get()
+                ok = widget.commit_minutes(revert=False)
+            if not ok:
                 rejected.append(typed)
         return rejected
 
     def add_activity_line(self):
         """Add a new activity line, preserving lock state of existing lines."""
         self.commit_pending_starts()
+        self.commit_pending_durations()
         locked_states = [w.is_locked() for w in self.activity_widgets]
         locked_indices = {i for i, locked in enumerate(locked_states) if locked}
         # A locked line's duration must never change, so equal redistribution
@@ -1431,6 +1472,7 @@ class SplitActivityDialog(simpledialog.Dialog):
     def remove_activity_line(self, index: int):
         """Remove an activity line, preserving lock state of the remaining lines."""
         self.commit_pending_starts()
+        self.commit_pending_durations()
         locked_states = [w.is_locked() for i, w in enumerate(self.activity_widgets) if i != index]
         self.activities = TimeCalculator.remove_activity(self.activities, index)
 
@@ -1450,7 +1492,7 @@ class SplitActivityDialog(simpledialog.Dialog):
 
     def distribute_equally(self):
         """Share the time equally among the lines that aren't locked."""
-        rejected = self.commit_pending_starts() + self.commit_pending_hours()
+        rejected = self.commit_pending_starts() + self.commit_pending_durations()
         if rejected:
             tk.messagebox.showerror("Cannot Distribute Time", f"Invalid value: {rejected[0]}")
             return
@@ -1484,11 +1526,16 @@ class SplitActivityDialog(simpledialog.Dialog):
 
     def validate(self) -> bool:
         """Validate the split activity data before accepting."""
-        # A start time still being typed when OK is clicked has seen no FocusOut.
-        # A rejected one stays in its field, for the user to correct.
+        # A value still being typed when OK is pressed from the keyboard has
+        # seen no FocusOut. A rejected one stays in its field, for the user to
+        # correct (FocusOut leaves it there too).
         rejected = self.commit_pending_starts()
         if rejected:
             tk.messagebox.showerror("Invalid Split", f"Invalid start time: {rejected[0]}")
+            return False
+        rejected = self.commit_pending_durations()
+        if rejected:
+            tk.messagebox.showerror("Invalid Split", f"Invalid duration: {rejected[0]}")
             return False
 
         # Create SplitActivityData and validate
